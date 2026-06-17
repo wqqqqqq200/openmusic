@@ -2,6 +2,8 @@
 
 多人实时在线点歌系统。支持 **网易云 / QQ音乐 / 酷狗** 三平台搜索点歌，房间内播放队列、进度、歌词多端同步。
 
+**在线体验**：[http://m.qqovo.cn/](http://m.qqovo.cn/)
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/Node-%3E%3D18-green)](https://nodejs.org/)
 

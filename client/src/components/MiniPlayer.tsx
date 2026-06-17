@@ -40,7 +40,9 @@ export default function MiniPlayer({ onExpand }: Props) {
 
   const handlePlayPause = () => {
     if (!room) return;
-    togglePlay(!room.isPlaying);
+    const next = !room.isPlaying;
+    togglePlay(next);
+    if (next) useAudioStore.getState().retryPlayback?.(true);
   };
 
   const handleSeek = (time: number) => seekPlayback?.(time);

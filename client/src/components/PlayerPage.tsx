@@ -64,7 +64,11 @@ export default function PlayerPage({ onClose }: Props) {
 
 
 
-  const handlePlayPause = () => togglePlay(!isPlaying);
+  const handlePlayPause = () => {
+    const next = !isPlaying;
+    togglePlay(next);
+    if (next) useAudioStore.getState().retryPlayback?.(true);
+  };
 
 
 

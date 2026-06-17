@@ -14,6 +14,7 @@ import Lyrics from '../components/Lyrics';
 import VinylPlayer from '../components/VinylPlayer';
 import SongInfoPanel from '../components/SongInfoPanel';
 import ProgressBar from '../components/ProgressBar';
+import AudioEngine from '../components/AudioEngine';
 
 export default function TvDisplay() {
   const { roomId } = useParams<{ roomId: string }>();
@@ -68,25 +69,23 @@ export default function TvDisplay() {
       .catch(() => setLyrics([]));
   }, [current?.id, current?.source, current?.name, current?.lrc, current?.duration, setLrcDuration]);
 
+  let content: React.ReactNode;
+
   if (joinError) {
-    return (
+    content = (
       <div className="h-full flex items-center justify-center bg-[#080808]">
         <p className="text-netease-red text-sm">{joinError}</p>
       </div>
     );
-  }
-
-  if (!room) {
-    return (
+  } else if (!room) {
+    content = (
       <div className="h-full flex flex-col items-center justify-center bg-[#080808] gap-3">
         <Loader2 className="w-8 h-8 text-netease-red animate-spin" />
         <p className="text-white/40 text-sm">正在连接...</p>
       </div>
     );
-  }
-
-  if (!current) {
-    return (
+  } else if (!current) {
+    content = (
       <div className="h-full w-full overflow-hidden bg-[#080808] select-none">
         <div className="h-full flex flex-col items-center justify-center animate-fade-in px-6">
           <div className="w-16 h-16 rounded-xl bg-white/5 flex items-center justify-center mb-4">
@@ -101,60 +100,66 @@ export default function TvDisplay() {
         </div>
       </div>
     );
+  } else {
+    const coverUrl = getCoverUrl(current);
+    content = (
+      <div className="fixed inset-0 z-50 flex flex-col animate-fade-in select-none">
+        <div
+          className="absolute inset-0 bg-cover bg-center transition-all duration-1000 scale-110"
+          style={{
+            backgroundImage: bgLoaded ? `url(${coverUrl})` : undefined,
+            filter: 'blur(60px) brightness(0.35)',
+          }}
+        />
+        <img src={coverUrl} alt="" className="hidden" onLoad={() => setBgLoaded(true)} />
+        <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-black/20 to-black/70" />
+
+        <div className="relative z-10 flex-1 flex flex-col lg:flex-row overflow-hidden min-h-0 px-4 lg:px-12 gap-4 lg:gap-10">
+          <div className="flex-shrink-0 lg:flex-1 flex items-center justify-center py-2 lg:py-8">
+            <VinylPlayer coverUrl={coverUrl} isPlaying={isPlaying} size="large" />
+          </div>
+
+          <div className="flex-1 flex flex-col min-h-0 min-w-0">
+            <SongInfoPanel
+              name={current.name}
+              artist={current.artist}
+              source={current.source || 'netease'}
+              requestedBy={current.requestedBy}
+              size="large"
+            />
+            <Lyrics lines={lyrics} currentTime={currentTime} variant="side" size="large" />
+          </div>
+        </div>
+
+        <footer className="relative z-10 px-8 pb-8 pt-3 flex-shrink-0">
+          <div className="mb-2 flex justify-between text-xs lg:text-sm text-white/50">
+            <span>{formatDuration(currentTime)}</span>
+            <span className="flex items-center gap-2">
+              {!isPlaying && <span className="text-amber-400/80">已暂停</span>}
+              {duration > 0 ? formatDuration(duration) : '--:--'}
+            </span>
+          </div>
+
+          <div className="py-2 -my-2">
+            <ProgressBar
+              progress={progress}
+              duration={duration}
+              onSeek={() => {}}
+              disabled
+              className="h-1"
+              trackClassName="bg-white/20"
+              fillClassName="bg-white"
+            />
+          </div>
+        </footer>
+      </div>
+    );
   }
 
-  const coverUrl = getCoverUrl(current);
-
   return (
-    <div className="fixed inset-0 z-50 flex flex-col animate-fade-in select-none">
-      <div
-        className="absolute inset-0 bg-cover bg-center transition-all duration-1000 scale-110"
-        style={{
-          backgroundImage: bgLoaded ? `url(${coverUrl})` : undefined,
-          filter: 'blur(60px) brightness(0.35)',
-        }}
-      />
-      <img src={coverUrl} alt="" className="hidden" onLoad={() => setBgLoaded(true)} />
-      <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-black/20 to-black/70" />
-
-      <div className="relative z-10 flex-1 flex flex-col lg:flex-row overflow-hidden min-h-0 px-4 lg:px-12 gap-4 lg:gap-10">
-        <div className="flex-shrink-0 lg:flex-1 flex items-center justify-center py-2 lg:py-8">
-          <VinylPlayer coverUrl={coverUrl} isPlaying={isPlaying} size="large" />
-        </div>
-
-        <div className="flex-1 flex flex-col min-h-0 min-w-0">
-          <SongInfoPanel
-            name={current.name}
-            artist={current.artist}
-            source={current.source || 'netease'}
-            requestedBy={current.requestedBy}
-            size="large"
-          />
-          <Lyrics lines={lyrics} currentTime={currentTime} variant="side" size="large" />
-        </div>
-      </div>
-
-      <footer className="relative z-10 px-8 pb-8 pt-3 flex-shrink-0">
-        <div className="mb-2 flex justify-between text-xs lg:text-sm text-white/50">
-          <span>{formatDuration(currentTime)}</span>
-          <span className="flex items-center gap-2">
-            {!isPlaying && <span className="text-amber-400/80">已暂停</span>}
-            {duration > 0 ? formatDuration(duration) : '--:--'}
-          </span>
-        </div>
-
-        <div className="py-2 -my-2">
-          <ProgressBar
-            progress={progress}
-            duration={duration}
-            onSeek={() => {}}
-            disabled
-            className="h-1"
-            trackClassName="bg-white/20"
-            fillClassName="bg-white"
-          />
-        </div>
-      </footer>
-    </div>
+    <>
+      <AudioEngine tvMode />
+      {content}
+    </>
   );
 }

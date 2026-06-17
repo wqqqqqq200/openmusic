@@ -476,7 +476,7 @@ io.on('connection', (socket) => {
     const result = removeUser(roomId, socket.id);
     socketToRoom.delete(socket.id);
 
-    if (result?.deleted) return;
+    if (result?.deleted || result?.empty) return;
     io.to(roomId).emit('room_update', result);
   });
 });

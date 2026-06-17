@@ -4,7 +4,29 @@ import { fetchRandomSong } from './wqwlkjApi.js';
 const generateRoomId = customAlphabet('ABCDEFGHJKLMNPQRSTUVWXYZ23456789', 6);
 const generateId = customAlphabet('0123456789abcdefghijklmnopqrstuvwxyz', 12);
 
+const ROOM_EMPTY_TTL_MS = 10 * 60 * 1000;
+
 const rooms = new Map();
+
+function cancelRoomDestroy(room) {
+  if (room.destroyTimer) {
+    clearTimeout(room.destroyTimer);
+    room.destroyTimer = null;
+  }
+}
+
+function scheduleRoomDestroy(roomId) {
+  const room = rooms.get(roomId);
+  if (!room) return;
+
+  cancelRoomDestroy(room);
+  room.destroyTimer = setTimeout(() => {
+    const current = rooms.get(roomId);
+    if (current && current.users.size === 0) {
+      rooms.delete(roomId);
+    }
+  }, ROOM_EMPTY_TTL_MS);
+}
 
 function createEmptyRoom(roomId) {
   return {
@@ -20,6 +42,7 @@ function createEmptyRoom(roomId) {
     skipRequests: [],
     messages: [],
     createdAt: Date.now(),
+    destroyTimer: null,
   };
 }
 
@@ -47,13 +70,15 @@ export function addUser(roomId, socketId, nickname) {
   const room = rooms.get(roomId);
   if (!room) return null;
 
+  cancelRoomDestroy(room);
+
   room.users.set(socketId, {
     id: socketId,
     nickname: nickname || `听众${room.users.size + 1}`,
     joinedAt: Date.now(),
   });
 
-  if (!room.ownerId) {
+  if (!room.ownerId || !room.users.has(room.ownerId)) {
     room.ownerId = socketId;
   }
 
@@ -67,8 +92,8 @@ export function removeUser(roomId, socketId) {
   room.users.delete(socketId);
 
   if (room.users.size === 0) {
-    rooms.delete(roomId);
-    return { deleted: true };
+    scheduleRoomDestroy(roomId);
+    return { empty: true };
   }
 
   if (room.ownerId === socketId) {

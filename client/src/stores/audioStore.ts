@@ -13,6 +13,11 @@ interface AudioStore {
   setMediaDuration: (trackKey: string | null, ms: number | null) => void;
   seekPlayback: ((time: number) => void) | null;
   setSeekPlayback: (fn: ((time: number) => void) | null) => void;
+  /** 浏览器拦截自动播放（常见于微信内置浏览器） */
+  needsAudioUnlock: boolean;
+  setNeedsAudioUnlock: (needs: boolean) => void;
+  retryPlayback: ((fromUserGesture?: boolean) => Promise<void>) | null;
+  setRetryPlayback: (fn: ((fromUserGesture?: boolean) => Promise<void>) | null) => void;
 }
 
 export const useAudioStore = create<AudioStore>((set) => ({
@@ -26,4 +31,8 @@ export const useAudioStore = create<AudioStore>((set) => ({
   setMediaDuration: (mediaTrackKey, mediaDurationMs) => set({ mediaTrackKey, mediaDurationMs }),
   seekPlayback: null,
   setSeekPlayback: (seekPlayback) => set({ seekPlayback }),
+  needsAudioUnlock: false,
+  setNeedsAudioUnlock: (needsAudioUnlock) => set({ needsAudioUnlock }),
+  retryPlayback: null,
+  setRetryPlayback: (retryPlayback) => set({ retryPlayback }),
 }));

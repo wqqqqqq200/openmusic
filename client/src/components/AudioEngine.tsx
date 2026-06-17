@@ -1,6 +1,11 @@
 import { useAudioPlayer } from '../hooks/useAudioPlayer';
+import AudioUnlockOverlay from './AudioUnlockOverlay';
 
-export default function AudioEngine() {
-  useAudioPlayer();
-  return null;
+interface Props {
+  tvMode?: boolean;
+}
+
+export default function AudioEngine({ tvMode = false }: Props) {
+  useAudioPlayer({ tvMode });
+  return <AudioUnlockOverlay tvMode={tvMode} />;
 }

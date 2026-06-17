@@ -8,8 +8,8 @@ interface Props {
 }
 
 const SIZE_CLASS = {
-  default: 'w-52 h-52 sm:w-60 sm:h-60 lg:w-72 lg:h-72 xl:w-80 xl:h-80',
-  large: 'w-60 h-60 sm:w-72 sm:h-72 lg:w-80 lg:h-80 xl:w-[400px] xl:h-[400px] 2xl:w-[440px] 2xl:h-[440px]',
+  default: 'w-52 h-52 sm:w-60 sm:h-60 lg:w-72 lg:h-72 xl:w-80 xl:h-80 2xl:w-96 2xl:h-96',
+  large: 'w-60 h-60 sm:w-72 sm:h-72 lg:w-80 lg:h-80 xl:w-[400px] xl:h-[400px] 2xl:w-[500px] 2xl:h-[500px] 3xl:w-[600px] 3xl:h-[600px]',
 };
 
 /** SVG viewBox 140×100，铰链圆心 — 改圆心坐标时同步改这里 */

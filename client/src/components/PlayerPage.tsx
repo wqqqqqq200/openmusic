@@ -162,33 +162,33 @@ export default function PlayerPage({ onClose }: Props) {
 
 
 
-      <header className="relative z-10 flex items-center px-4 py-3 flex-shrink-0">
+      <header className="relative z-10 flex items-center px-4 py-3 2xl:px-8 2xl:py-6 flex-shrink-0">
 
         <button
 
           onClick={onClose}
 
-          className="w-10 h-10 flex items-center justify-center rounded-full hover:bg-white/10 transition-colors"
+          className="w-10 h-10 2xl:w-16 2xl:h-16 flex items-center justify-center rounded-full hover:bg-white/10 transition-colors"
 
         >
 
-          <ChevronDown className="w-6 h-6" />
+          <ChevronDown className="w-6 h-6 2xl:w-10 2xl:h-10" />
 
         </button>
 
         <div className="flex-1" />
 
-        <div className="w-10" />
+        <div className="w-10 2xl:w-16" />
 
       </header>
 
 
 
-      <div className="relative z-10 flex-1 flex flex-col lg:flex-row overflow-hidden min-h-0 px-4 lg:px-12 gap-4 lg:gap-8">
+      <div className="relative z-10 flex-1 flex flex-col lg:flex-row overflow-hidden min-h-0 px-4 lg:px-12 2xl:px-24 gap-4 lg:gap-8 2xl:gap-16">
 
-        <div className="flex-shrink-0 lg:flex-1 flex items-center justify-center py-2 lg:py-8">
+        <div className="flex-shrink-0 lg:flex-1 flex items-center justify-center py-2 lg:py-8 2xl:py-16">
 
-          <VinylPlayer coverUrl={coverUrl} isPlaying={isPlaying} />
+          <VinylPlayer coverUrl={coverUrl} isPlaying={isPlaying} size="large" />
 
         </div>
 
@@ -201,6 +201,7 @@ export default function PlayerPage({ onClose }: Props) {
             artist={current.artist}
             source={current.source || 'netease'}
             requestedBy={current.requestedBy}
+            size="large"
           />
 
           <Lyrics
@@ -223,9 +224,9 @@ export default function PlayerPage({ onClose }: Props) {
 
 
 
-      <footer className="relative z-10 px-6 pb-6 pt-3 flex-shrink-0">
+      <footer className="relative z-10 px-6 pb-6 pt-3 flex-shrink-0 2xl:px-12 2xl:pb-12 2xl:pt-6">
 
-        <div className="mb-2 flex justify-between text-sm text-white/50">
+        <div className="mb-2 flex justify-between text-sm 2xl:text-xl text-white/50">
 
           <span>{formatDuration(currentTime)}</span>
 
@@ -235,7 +236,7 @@ export default function PlayerPage({ onClose }: Props) {
 
 
 
-        <div className="mb-4 py-2 -my-2">
+        <div className="mb-4 py-2 -my-2 2xl:mb-8">
 
           <ProgressBar
 
@@ -247,11 +248,13 @@ export default function PlayerPage({ onClose }: Props) {
 
             disabled={!isOwner}
 
-            className="h-1.5"
+            className="h-1.5 2xl:h-2.5"
 
             trackClassName="bg-white/20"
 
             fillClassName="bg-white"
+
+            thumbClassName="w-3 h-3 2xl:w-5 2xl:h-5"
 
             showThumb
 
@@ -259,21 +262,21 @@ export default function PlayerPage({ onClose }: Props) {
 
         </div>
 
-        <div className="flex items-center justify-center gap-10">
+        <div className="flex items-center justify-center gap-10 2xl:gap-16">
 
-          <div className="w-12" />
+          <div className="w-12 2xl:w-20" />
 
           <button
             onClick={handlePlayPause}
             disabled={trackLoading}
-            className="w-16 h-16 flex items-center justify-center rounded-full bg-white text-black hover:scale-105 transition-transform shadow-lg shadow-black/30 disabled:opacity-60"
+            className="w-16 h-16 2xl:w-24 2xl:h-24 flex items-center justify-center rounded-full bg-white text-black hover:scale-105 transition-transform shadow-lg shadow-black/30 disabled:opacity-60"
           >
             {trackLoading ? (
-              <Loader2 className="w-7 h-7 animate-spin" />
+              <Loader2 className="w-7 h-7 2xl:w-10 2xl:h-10 animate-spin" />
             ) : isPlaying ? (
-              <Pause className="w-7 h-7" />
+              <Pause className="w-7 h-7 2xl:w-10 2xl:h-10" />
             ) : (
-              <Play className="w-7 h-7 ml-0.5" />
+              <Play className="w-7 h-7 2xl:w-10 2xl:h-10 ml-0.5 2xl:ml-1" />
             )}
           </button>
 
@@ -281,23 +284,23 @@ export default function PlayerPage({ onClose }: Props) {
             <button
               onClick={handleSkip}
               disabled={trackLoading}
-              className="w-12 h-12 flex items-center justify-center text-white/70 hover:text-white transition-colors disabled:opacity-50"
+              className="w-12 h-12 2xl:w-20 2xl:h-20 flex items-center justify-center text-white/70 hover:text-white transition-colors disabled:opacity-50"
               title="切歌"
             >
               {trackLoading ? (
-                <Loader2 className="w-6 h-6 animate-spin" />
+                <Loader2 className="w-6 h-6 2xl:w-8 2xl:h-8 animate-spin" />
               ) : (
-                <SkipForward className="w-6 h-6" />
+                <SkipForward className="w-6 h-6 2xl:w-8 2xl:h-8" />
               )}
             </button>
           ) : (
             <button
               onClick={handleRequestSkip}
               disabled={hasPendingSkip}
-              className="w-12 h-12 flex items-center justify-center text-white/70 hover:text-white transition-colors disabled:opacity-40"
+              className="w-12 h-12 2xl:w-20 2xl:h-20 flex items-center justify-center text-white/70 hover:text-white transition-colors disabled:opacity-40"
               title={hasPendingSkip ? '已申请切歌' : '申请切歌'}
             >
-              <SkipForward className="w-6 h-6" />
+              <SkipForward className="w-6 h-6 2xl:w-8 2xl:h-8" />
             </button>
           )}
 
@@ -307,7 +310,7 @@ export default function PlayerPage({ onClose }: Props) {
 
         {(skipError || skipMsg) && (
 
-          <p className={`text-center text-xs mt-2 ${skipMsg ? 'text-amber-300' : 'text-red-300'}`}>
+          <p className={`text-center text-xs 2xl:text-base mt-2 2xl:mt-4 ${skipMsg ? 'text-amber-300' : 'text-red-300'}`}>
             {skipMsg || skipError}
           </p>
 

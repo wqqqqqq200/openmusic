@@ -8,6 +8,7 @@ interface Props {
   className?: string;
   trackClassName?: string;
   fillClassName?: string;
+  thumbClassName?: string;
   showThumb?: boolean;
 }
 
@@ -19,6 +20,7 @@ export default function ProgressBar({
   className = 'h-1',
   trackClassName = 'bg-white/20',
   fillClassName = 'bg-white',
+  thumbClassName = 'w-3 h-3',
   showThumb = false,
 }: Props) {
   const barRef = useRef<HTMLDivElement>(null);
@@ -72,7 +74,7 @@ export default function ProgressBar({
         style={{ width: `${displayProgress}%` }}
       >
         {showThumb && (
-          <div className="absolute right-0 top-1/2 -translate-y-1/2 w-3 h-3 bg-white rounded-full shadow opacity-100" />
+          <div className={`absolute right-0 top-1/2 -translate-y-1/2 bg-white rounded-full shadow opacity-100 ${thumbClassName}`} />
         )}
       </div>
     </div>

@@ -1,0 +1,89 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: #0d0d0d;
+  color: #e8e8e8;
+  font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #444;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #666;
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+@keyframes vinyl-disc-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* 黑胶旋转：放在 layer 外，避免被 Tailwind utilities 覆盖 */
+.vinyl-disc {
+  animation: vinyl-disc-spin 18s linear infinite;
+  animation-play-state: paused;
+  will-change: transform;
+}
+
+.vinyl-disc--playing {
+  animation-play-state: running;
+}
+
+@layer utilities {
+  .glass {
+    background: rgba(30, 30, 30, 0.75);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+  }
+
+  .text-gradient {
+    background: linear-gradient(135deg, #ec4141, #ff6b6b);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .skeleton-shimmer {
+    background: linear-gradient(
+      90deg,
+      #242424 0%,
+      #333 20%,
+      #242424 40%,
+      #242424 100%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.6s ease-in-out infinite;
+  }
+
+  .safe-top {
+    padding-top: max(0.625rem, env(safe-area-inset-top, 0px));
+  }
+}

@@ -8,11 +8,11 @@
 [![Node](https://img.shields.io/badge/Node-%3E%3D18-green)](https://nodejs.org/)
 
 <p align="center">
-  <img src="docs/screenshots/home.png" alt="房间大厅" width="92%" />
+  <img src="docs/screenshots/home.png" alt="房间大厅" width="100%" />
   <br /><br />
-  <img src="docs/screenshots/room.png" alt="房间内点歌" width="92%" />
+  <img src="docs/screenshots/room.png" alt="房间内点歌" width="100%" />
   <br /><br />
-  <img src="docs/screenshots/lyrics.png" alt="歌词播放界面" width="92%" />
+  <img src="docs/screenshots/lyrics.png" alt="歌词播放界面" width="100%" />
 </p>
 
 ---

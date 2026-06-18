@@ -9,7 +9,7 @@
 
 <p align="center">
   <img src="docs/screenshots/home.png" alt="房间大厅" width="45%" />
-  &nbsp;
+  <br /><br />
   <img src="docs/screenshots/room.png" alt="房间内点歌" width="45%" />
   <br /><br />
   <img src="docs/screenshots/lyrics.png" alt="歌词播放界面" width="92%" />

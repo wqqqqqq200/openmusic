@@ -19,6 +19,7 @@ import SongInfoPanel from './SongInfoPanel';
 
 import ProgressBar from './ProgressBar';
 import VolumeControl from './VolumeControl';
+import FavoriteButton from './FavoriteButton';
 
 
 
@@ -250,24 +251,26 @@ export default function PlayerPage({ onClose }: Props) {
             buttonClassName="w-10 h-10 sm:w-12 sm:h-12 2xl:w-20 2xl:h-20 text-white/70 hover:text-white"
           />
 
-          {isOwner ? (
-            <button
-              onClick={handlePlayPause}
-              disabled={trackLoading}
-              className="w-14 h-14 sm:w-16 sm:h-16 2xl:w-24 2xl:h-24 flex items-center justify-center rounded-full bg-white text-black hover:scale-105 transition-transform shadow-lg shadow-black/30 disabled:opacity-60"
-              title="暂停/播放"
-            >
-              {trackLoading ? (
-                <Loader2 className="w-6 h-6 sm:w-7 sm:h-7 2xl:w-10 2xl:h-10 animate-spin" />
-              ) : isPlaying ? (
-                <Pause className="w-6 h-6 sm:w-7 sm:h-7 2xl:w-10 2xl:h-10" />
-              ) : (
-                <Play className="w-6 h-6 sm:w-7 sm:h-7 2xl:w-10 2xl:h-10 ml-0.5 2xl:ml-1" />
-              )}
-            </button>
-          ) : (
-            <div className="w-14 h-14 sm:w-16 sm:h-16 2xl:w-24 2xl:h-24" />
-          )}
+          <FavoriteButton
+            song={current}
+            className="w-10 h-10 sm:w-12 sm:h-12 2xl:w-20 2xl:h-20 text-white/70 hover:text-rose-300"
+            iconClassName="w-5 h-5 sm:w-6 sm:h-6 2xl:w-8 2xl:h-8"
+          />
+
+          <button
+            onClick={isOwner ? handlePlayPause : undefined}
+            disabled={trackLoading || !isOwner}
+            className={`w-14 h-14 sm:w-16 sm:h-16 2xl:w-24 2xl:h-24 flex items-center justify-center rounded-full transition-all shadow-lg shadow-black/30 disabled:opacity-80 ${isOwner ? 'bg-white text-black hover:scale-105' : 'bg-white/10 text-white/70 cursor-not-allowed'}`}
+            title={isOwner ? '暂停/播放' : (isPlaying ? '房主正在播放' : '房主已暂停')}
+          >
+            {trackLoading ? (
+              <Loader2 className="w-6 h-6 sm:w-7 sm:h-7 2xl:w-10 2xl:h-10 animate-spin" />
+            ) : isPlaying ? (
+              <Pause className="w-6 h-6 sm:w-7 sm:h-7 2xl:w-10 2xl:h-10" />
+            ) : (
+              <Play className="w-6 h-6 sm:w-7 sm:h-7 2xl:w-10 2xl:h-10 ml-0.5 2xl:ml-1" />
+            )}
+          </button>
 
           {isOwner ? (
             <button

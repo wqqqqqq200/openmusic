@@ -14,6 +14,7 @@ const generateId = customAlphabet('0123456789abcdefghijklmnopqrstuvwxyz', 12);
 
 const ROOM_EMPTY_TTL_MS = 10 * 60 * 1000;
 const MAX_QUEUE_LENGTH = 200;
+const MAX_SONG_HISTORY = 150;
 const MAX_RANDOM_HISTORY = 200;
 const MAX_RANDOM_PREFETCH_ATTEMPTS = 20;
 const AUTO_ADVANCE_GRACE_SEC = 0.15;
@@ -84,6 +85,7 @@ function snapshotRoomForStorage(room) {
     playbackVersion: room.playbackVersion ?? 0,
     playbackUpdatedAt: room.playbackUpdatedAt ?? Date.now(),
     messages: room.messages.slice(-100),
+    songHistory: (room.songHistory || []).slice(-MAX_SONG_HISTORY),
     jumpRequests: room.jumpRequests,
     skipRequests: room.skipRequests,
     randomPlayedKeys: Array.from(room.randomPlayedKeys),
@@ -101,6 +103,7 @@ function restoreRoomFromStorage(data) {
   room.playbackVersion = data.playbackVersion ?? 0;
   room.playbackUpdatedAt = data.playbackUpdatedAt ?? Date.now();
   room.messages = data.messages || [];
+  room.songHistory = Array.isArray(data.songHistory) ? data.songHistory.slice(-MAX_SONG_HISTORY) : [];
   room.jumpRequests = data.jumpRequests || [];
   room.skipRequests = data.skipRequests || [];
   room.randomPlayedKeys = new Set(data.randomPlayedKeys || []);
@@ -231,6 +234,7 @@ function createEmptyRoom(roomId, name, passwordHash = null) {
     jumpRequests: [],
     skipRequests: [],
     messages: [],
+    songHistory: [],
     randomPlayedKeys: new Set(),
     nextRandom: null,
     nextRandomPromise: null,
@@ -684,6 +688,20 @@ function isSongInPlaylist(room, song) {
   return room.queue.some((item) => songIdentity(item.source, item.id) === key);
 }
 
+function getQueueLikes(item) {
+  return Array.isArray(item?.likedByIds) ? item.likedByIds.length : 0;
+}
+
+function sortQueueByPriority(room) {
+  room.queue.sort((a, b) => {
+    const priorityDiff = (b.ownerPriority || 0) - (a.ownerPriority || 0);
+    if (priorityDiff !== 0) return priorityDiff;
+    const likeDiff = getQueueLikes(b) - getQueueLikes(a);
+    if (likeDiff !== 0) return likeDiff;
+    return (a.addedAt || 0) - (b.addedAt || 0);
+  });
+}
+
 export async function addToQueue(roomId, song, requestedByUser) {
   const room = rooms.get(roomId);
   if (!room) return { error: '房间不存在' };
@@ -707,9 +725,28 @@ export async function addToQueue(roomId, song, requestedByUser) {
     requestedBy: requestedBy.nickname,
     requestedById: requestedBy.id,
     addedAt: Date.now(),
+    likedByIds: [],
+    ownerPriority: 0,
   };
 
   room.queue.push(item);
+  room.songHistory = [
+    {
+      id: item.id,
+      source: item.source,
+      name: item.name,
+      artist: item.artist,
+      album: item.album,
+      pic: item.pic,
+      duration: item.duration,
+      url: item.url,
+      lrc: item.lrc,
+      requestedBy: requestedBy.nickname,
+      requestedById: requestedBy.id,
+      requestedAt: item.addedAt,
+    },
+    ...(room.songHistory || []),
+  ].slice(0, MAX_SONG_HISTORY);
 
   if (!room.current) {
     await withPlaybackLock(room, async () => {
@@ -719,6 +756,23 @@ export async function addToQueue(roomId, song, requestedByUser) {
 
   persistRoom(room);
   return { room: serializeRoom(room) };
+}
+
+export function toggleQueueLike(roomId, userId, queueId) {
+  const room = rooms.get(roomId);
+  if (!room) return { error: '房间不存在' };
+  const user = room.users.get(userId);
+  if (!user) return { error: '未加入房间' };
+
+  const item = room.queue.find((s) => s.queueId === queueId);
+  if (!item) return { error: '只能点赞待播放歌曲' };
+
+  const likedByIds = Array.isArray(item.likedByIds) ? item.likedByIds : [];
+  const nextLiked = !likedByIds.includes(userId);
+  item.likedByIds = nextLiked ? [...likedByIds, userId] : likedByIds.filter((id) => id !== userId);
+  sortQueueByPriority(room);
+  persistRoom(room);
+  return { room: serializeRoom(room), liked: nextLiked };
 }
 
 export function removeFromQueue(roomId, socketId, queueId) {
@@ -998,11 +1052,13 @@ export function seekTo(roomId, socketId, time, connectionId = null) {
   return serializeRoom(room);
 }
 
-async function applyJumpToFront(room, queueId) {
+async function applyJumpToFront(room, queueId, options = {}) {
+  const { ownerPriority = false } = options;
   const qIdx = room.queue.findIndex((s) => s.queueId === queueId);
   if (qIdx === -1) return false;
 
   const [song] = room.queue.splice(qIdx, 1);
+  if (ownerPriority) song.ownerPriority = Date.now();
   room.queue.unshift(song);
   if (!room.current) {
     await withPlaybackLock(room, async () => {
@@ -1021,10 +1077,11 @@ export async function requestJump(roomId, socketId, queueId) {
 
   const item = room.queue.find((s) => s.queueId === queueId);
   if (!item) return { error: '歌曲不在队列中' };
+  const isOwner = isOwnerConnection(room, socketId);
   const isRequester = isQueueRequester(item, socketId, user);
-  if (!isRequester) return { error: '只能为自己点的歌插队' };
+  if (!isOwner && !isRequester) return { error: '只能为自己点的歌插队' };
 
-  const jumped = await applyJumpToFront(room, queueId);
+  const jumped = await applyJumpToFront(room, queueId, { ownerPriority: isOwner });
   if (!jumped) return { error: '歌曲不在队列中' };
 
   room.jumpRequests = room.jumpRequests.filter((r) => r.queueId !== queueId);
@@ -1043,7 +1100,7 @@ export async function approveJump(roomId, socketId, requestId, connectionId = nu
   const req = room.jumpRequests[reqIdx];
   room.jumpRequests.splice(reqIdx, 1);
 
-  await applyJumpToFront(room, req.queueId);
+  await applyJumpToFront(room, req.queueId, { ownerPriority: true });
 
   persistRoom(room);
   return { room: serializeRoom(room) };
@@ -1113,7 +1170,7 @@ export function rejectSkip(roomId, socketId, requestId, connectionId = null) {
   return { room: serializeRoom(room) };
 }
 
-export function addChatMessage(roomId, userId, text) {
+export function addChatMessage(roomId, userId, text, options = {}) {
   const room = rooms.get(roomId);
   if (!room) return { error: '房间不存在' };
 
@@ -1127,6 +1184,8 @@ export function addChatMessage(roomId, userId, text) {
     userId,
     nickname: user?.nickname || '匿名',
     text: content,
+    mentions: Array.isArray(options.mentions) ? options.mentions.slice(0, 10) : [],
+    replyTo: options.replyTo || null,
     timestamp: Date.now(),
   };
 
@@ -1199,6 +1258,7 @@ function serializeRoom(room) {
     jumpRequests: room.jumpRequests,
     skipRequests: room.skipRequests,
     messages: room.messages,
+    songHistory: room.songHistory || [],
     randomLoading: Boolean(room.randomLoading),
   };
 }

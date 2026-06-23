@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { Trash2, Music, Zap } from 'lucide-react';
+import { Trash2, Music, Zap, ThumbsUp } from 'lucide-react';
 import { getClientId } from '../lib/clientId';
 import { useRoomStore } from '../stores/roomStore';
 import { useSocket } from '../hooks/useSocket';
 import { getCoverUrl } from '../api/music';
 import SourceBadge from './SourceBadge';
+import FavoriteButton from './FavoriteButton';
 
 /** 单条约 64px + 间距，固定显示 3 条 */
 const VISIBLE_ROWS = 3;
@@ -21,7 +22,7 @@ export default function QueuePanel({ fillHeight = false }: Props) {
   const nickname = useRoomStore((s) => s.nickname);
   const mySocketId = useRoomStore((s) => s.mySocketId);
   const isOwner = useRoomStore((s) => s.isOwner);
-  const { removeSong, requestJump } = useSocket();
+  const { removeSong, requestJump, toggleQueueLike } = useSocket();
   const [jumpMsg, setJumpMsg] = useState('');
   const currentRef = useRef<HTMLDivElement>(null);
 
@@ -39,15 +40,24 @@ export default function QueuePanel({ fillHeight = false }: Props) {
     currentRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }, [currentKey]);
 
+  const showQueueMessage = (message: string) => {
+    setJumpMsg(message);
+    setTimeout(() => setJumpMsg(''), 3000);
+  };
+
   const handleJumpRequest = async (queueId: string) => {
     setJumpMsg('');
     const res = await requestJump(queueId);
     if (res.success) {
-      setJumpMsg('已插队到下一首');
-      setTimeout(() => setJumpMsg(''), 3000);
+      showQueueMessage(isOwner ? '已插队到下一首，优先于点赞排序' : '已插队到下一首');
     } else {
-      setJumpMsg(res.error || '插队失败');
+      showQueueMessage(res.error || '插队失败');
     }
+  };
+
+  const handleLike = async (queueId: string) => {
+    const res = await toggleQueueLike(queueId);
+    if (!res.success && res.error) showQueueMessage(res.error);
   };
 
   if (!room) return null;
@@ -82,6 +92,10 @@ export default function QueuePanel({ fillHeight = false }: Props) {
             (myUserId && song.requestedById === myUserId)
             || song.requestedBy === nickname
           );
+          const likedByIds = Array.isArray(song.likedByIds) ? song.likedByIds : [];
+          const likeCount = likedByIds.length;
+          const likedByMe = Boolean(myUserId && likedByIds.includes(myUserId));
+          const canJump = !song.isCurrent && (isOwner || isMine);
           const canRemove = !song.isCurrent && (isOwner || isMine);
 
           return (
@@ -91,7 +105,9 @@ export default function QueuePanel({ fillHeight = false }: Props) {
               className={`group flex items-center gap-2.5 px-2.5 py-2 rounded-xl transition-colors ${
                 song.isCurrent
                   ? 'bg-netease-red/10 border border-netease-red/25'
-                  : 'bg-netease-card/35 hover:bg-netease-card/80'
+                  : song.ownerPriority
+                    ? 'bg-amber-400/10 border border-amber-400/20 hover:bg-amber-400/15'
+                    : 'bg-netease-card/35 hover:bg-netease-card/80'
               }`}
               style={{ minHeight: ROW_HEIGHT }}
             >
@@ -121,10 +137,52 @@ export default function QueuePanel({ fillHeight = false }: Props) {
                   >
                     {song.name}
                   </p>
+                  {Boolean(song.ownerPriority) && (
+                    <span className="rounded-full bg-amber-400/15 px-1.5 py-0 text-[9px] leading-4 text-amber-300">房主</span>
+                  )}
                   <SourceBadge
                     source={song.source || 'netease'}
                     className="rounded-full px-1.5 py-0 text-[9px] leading-4"
                   />
+                  <FavoriteButton
+                    song={song}
+                    className="w-7 h-7 text-netease-muted hover:text-rose-300"
+                    iconClassName="w-3.5 h-3.5"
+                  />
+                  {!song.isCurrent && (
+                    <div className="flex flex-shrink-0 items-center gap-0.5">
+                      <button
+                        onClick={() => handleLike(song.queueId)}
+                        className={`flex min-w-7 items-center justify-center gap-0.5 rounded-lg px-1 py-1 text-[11px] transition-colors ${
+                          likedByMe
+                            ? 'bg-netease-red/10 text-netease-red'
+                            : 'text-netease-muted hover:bg-white/10 hover:text-white'
+                        }`}
+                        title={likedByMe ? '取消点赞' : '点赞提高排序'}
+                      >
+                        <ThumbsUp className="h-3.5 w-3.5" />
+                        {likeCount > 0 && <span>{likeCount}</span>}
+                      </button>
+                      {canJump && (
+                        <button
+                          onClick={() => handleJumpRequest(song.queueId)}
+                          className="rounded-lg p-1 text-amber-400/75 transition-colors hover:bg-amber-400/10 hover:text-amber-300"
+                          title={isOwner ? '房主插队，优先于点赞排序' : '插队到下一首'}
+                        >
+                          <Zap className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                      {canRemove && (
+                        <button
+                          onClick={() => removeSong(song.queueId)}
+                          className="rounded-lg p-1 text-netease-muted transition-colors hover:bg-netease-red/10 hover:text-netease-red"
+                          title={isOwner && !isMine ? '移除歌曲' : '删除我的点歌'}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
                 <div className="flex items-center gap-2 text-[11px] leading-4 text-netease-muted min-w-0">
                   <span className="min-w-0 truncate" title={song.artist}>
@@ -136,26 +194,6 @@ export default function QueuePanel({ fillHeight = false }: Props) {
                     </span>
                   )}
                 </div>
-              </div>
-              <div className="flex flex-col items-center gap-1 flex-shrink-0">
-                {isMine && (
-                  <button
-                    onClick={() => handleJumpRequest(song.queueId)}
-                    className="p-1.5 rounded-lg text-amber-400/75 hover:text-amber-300 hover:bg-amber-400/10 transition-colors"
-                    title="插队到下一首"
-                  >
-                    <Zap className="w-3.5 h-3.5" />
-                  </button>
-                )}
-                {canRemove && (
-                  <button
-                    onClick={() => removeSong(song.queueId)}
-                    className="p-1.5 rounded-lg text-netease-muted hover:text-netease-red hover:bg-netease-red/10 transition-colors"
-                    title={isOwner && !isMine ? '移除歌曲' : '删除我的点歌'}
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                )}
               </div>
             </div>
           );

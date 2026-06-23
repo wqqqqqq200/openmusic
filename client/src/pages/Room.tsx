@@ -2,21 +2,24 @@ import { useState, useEffect, useCallback } from 'react';
 
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 
-import { Search, Loader2, Copy, Check, Crown, Tv, LogOut, X } from 'lucide-react';
+import { Search, Loader2, Copy, Check, Crown, Tv, LogOut, X, Heart, Trash2, Plus, Download, ListMusic, Upload, History } from 'lucide-react';
 
 import { searchAllSongs, getAvailableSources, type SearchFilterMode } from '../api/music';
-import { importPlaylist, type PlaylistPlatform } from '../api/music/playlist';
+import { importPlaylist, searchNeteasePlaylists, type NeteasePlaylistSearchItem, type PlaylistPlatform } from '../api/music/playlist';
+import { rememberPlaylistImportHistory } from '../components/PlaylistImportModal';
 
-import type { SearchResult } from '../types';
+import type { FavoriteSong, MusicSource, SearchResult, Song, SongHistoryItem } from '../types';
 
 import type { MusicProviderMeta } from '../api/music/types';
 
 import { useRoomStore } from '../stores/roomStore';
 
 import { useSocket } from '../hooks/useSocket';
+import { useFavorites } from '../hooks/useFavorites';
 import { createRandomNickname } from '../lib/randomNickname';
 
 import { songKey } from '../api/music';
+import { getCoverUrl } from '../api/music';
 
 import QueuePanel from '../components/QueuePanel';
 
@@ -29,6 +32,7 @@ import OnlineUsers from '../components/OnlineUsers';
 import AudioEngine from '../components/AudioEngine';
 
 import SongResultList from '../components/SongResultList';
+import SourceBadge from '../components/SourceBadge';
 import SearchFilterSelect from '../components/SearchFilterSelect';
 import SearchSkeleton from '../components/SearchSkeleton';
 import PlaylistImportModal from '../components/PlaylistImportModal';
@@ -63,6 +67,62 @@ function rememberRoomPassword(roomId: string, password?: string) {
   }
 }
 
+function mapImportedSource(source: unknown): MusicSource {
+  if (source === 'wy' || source === 'netease') return 'netease';
+  if (source === 'qq' || source === 'tencent') return 'tencent';
+  if (source === 'kugou') return 'kugou';
+  return 'netease';
+}
+
+function normalizeImportedFavorite(raw: unknown): Song | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const item = raw as Record<string, any>;
+  const id = String(item.id || item.mediaMid || '').trim();
+  const name = String(item.name || '').trim();
+  const artist = String(item.artist || item.album?.artist || '').trim();
+  if (!id || !name) return null;
+  return {
+    id,
+    source: mapImportedSource(item.source),
+    name,
+    artist: artist || '未知歌手',
+    album: typeof item.album?.name === 'string' ? item.album.name : undefined,
+    pic: String(item.pictureUrl || item.pic || item.album?.pictureUrl || '').trim() || undefined,
+    duration: Number.isFinite(Number(item.duration)) ? Number(item.duration) : undefined,
+    lrc: typeof item.lyric === 'string' ? item.lyric : undefined,
+  };
+}
+
+function parseFavoriteImportJson(text: string): Song[] {
+  const parsed = JSON.parse(text) as unknown;
+  const rawItems = Array.isArray(parsed) ? parsed : Object.values(parsed as Record<string, unknown> || {});
+  return rawItems.map(normalizeImportedFavorite).filter(Boolean) as Song[];
+}
+
+function chunkSongs<T>(items: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size));
+  return chunks;
+}
+
+function formatHistoryTime(time: number) {
+  if (!time) return '';
+  try {
+    return new Intl.DateTimeFormat('zh-CN', {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(new Date(time));
+  } catch {
+    return '';
+  }
+}
+
+const PLAYLIST_SEARCH_PAGE_SIZE = 6;
+const FAVORITES_IMPORT_BATCH_SIZE = 500;
+type SearchMode = 'song' | 'playlist';
+
 
 export default function Room() {
 
@@ -76,7 +136,8 @@ export default function Room() {
 
   const { room, showPlayer, setShowPlayer, isOwner, exitReason } = useRoomStore();
 
-  const { joinRoom, addSong, leaveRoom } = useSocket();
+  const { joinRoom, addSong, leaveRoom, listFavorites, setFavorite, importFavorites } = useSocket();
+  const { applyFavorites } = useFavorites();
 
 
 
@@ -95,18 +156,138 @@ export default function Room() {
   const [copied, setCopied] = useState(false);
   const [tvCopied, setTvCopied] = useState(false);
   const [searchedKeyword, setSearchedKeyword] = useState('');
+  const [searchMode, setSearchMode] = useState<SearchMode>('song');
   const [searchFilterMode, setSearchFilterMode] = useState<SearchFilterMode>('smart');
   const [playlistImportOpen, setPlaylistImportOpen] = useState(false);
   const [neteaseToplistOpen, setNeteaseToplistOpen] = useState(false);
   const [isPlaylistResults, setIsPlaylistResults] = useState(false);
+  const [playlistSearchResults, setPlaylistSearchResults] = useState<NeteasePlaylistSearchItem[]>([]);
+  const [playlistSearchPage, setPlaylistSearchPage] = useState(1);
+  const [playlistSearchTotal, setPlaylistSearchTotal] = useState(0);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [hotRefreshKey, setHotRefreshKey] = useState(0);
+  const [favoritesOpen, setFavoritesOpen] = useState(false);
+  const [songHistoryOpen, setSongHistoryOpen] = useState(false);
+  const [favoritesLoading, setFavoritesLoading] = useState(false);
+  const [favorites, setFavorites] = useState<FavoriteSong[]>([]);
+  const [favoriteQuery, setFavoriteQuery] = useState('');
+  const [removingFavoriteId, setRemovingFavoriteId] = useState<string | null>(null);
+  const [importingFavorites, setImportingFavorites] = useState(false);
+  const [favoritesImportProgress, setFavoritesImportProgress] = useState('');
 
   const showToast = useCallback((message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type });
   }, []);
 
   const closeToast = useCallback(() => setToast(null), []);
+
+  const filteredFavorites = favorites.filter((song) => {
+    const keyword = favoriteQuery.trim().toLowerCase();
+    if (!keyword) return true;
+    return [song.name, song.artist, song.album, song.lrc].some((value) => String(value || '').toLowerCase().includes(keyword));
+  });
+
+  const openFavorites = useCallback(async () => {
+    setFavoritesOpen(true);
+    setFavoritesLoading(true);
+    const res = await listFavorites();
+    setFavoritesLoading(false);
+    if (res.success) {
+      const next = res.favorites || [];
+      setFavorites(next);
+      applyFavorites(next);
+    } else {
+      showToast(res.error || '收藏列表加载失败', 'error');
+    }
+  }, [listFavorites, showToast, applyFavorites]);
+
+  const removeFavorite = useCallback(async (song: FavoriteSong) => {
+    const key = songKey(song);
+    setRemovingFavoriteId(key);
+    const res = await setFavorite(song, false);
+    setRemovingFavoriteId(null);
+    if (res.success) {
+      const next = res.favorites || [];
+      setFavorites(next);
+      applyFavorites(next);
+      showToast('已取消收藏', 'success');
+    } else {
+      showToast(res.error || '取消收藏失败', 'error');
+    }
+  }, [setFavorite, showToast, applyFavorites]);
+
+  const handleImportFavoritesJson = useCallback(() => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'application/json,.json';
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      setImportingFavorites(true);
+      setFavoritesImportProgress('');
+      try {
+        const songs = parseFavoriteImportJson(await file.text());
+        if (songs.length === 0) {
+          showToast('JSON 中没有可导入的歌曲', 'error');
+          return;
+        }
+        const batches = chunkSongs(songs, FAVORITES_IMPORT_BATCH_SIZE);
+        let imported = 0;
+        let dropped = 0;
+        let maxFavorites = 5000;
+        for (let index = 0; index < batches.length; index += 1) {
+          setFavoritesImportProgress(`导入进度 ${Math.min((index + 1) * FAVORITES_IMPORT_BATCH_SIZE, songs.length)}/${songs.length}`);
+          const res = await importFavorites(batches[index]);
+          if (!res.success) {
+            showToast(res.error || `导入到 ${index * FAVORITES_IMPORT_BATCH_SIZE}/${songs.length} 时失败`, 'error');
+            return;
+          }
+          imported += res.imported || 0;
+          dropped = Math.max(dropped, res.dropped || 0);
+          if (res.maxFavorites) maxFavorites = res.maxFavorites;
+          if (res.favorites) {
+            setFavorites(res.favorites);
+            applyFavorites(res.favorites);
+          }
+        }
+        if (dropped > 0) {
+          showToast(`已导入 ${imported} 首新收藏，${dropped} 首因超出 ${maxFavorites} 首上限未导入`, 'success');
+        } else {
+          showToast(`已导入 ${imported} 首新收藏，重复歌曲已跳过`, 'success');
+        }
+      } catch {
+        showToast('JSON 解析失败，请检查文件格式', 'error');
+      } finally {
+        setImportingFavorites(false);
+        setFavoritesImportProgress('');
+      }
+    };
+    input.click();
+  }, [importFavorites, showToast, applyFavorites]);
+
+  const handleExportFavoritesJson = useCallback(() => {
+    const data = Object.fromEntries(favorites.map((song) => [
+      `${song.source}:${song.id}`,
+      {
+        id: song.id,
+        source: song.source,
+        name: song.name,
+        artist: song.artist,
+        album: song.album || '',
+        pic: song.pic || '',
+        duration: song.duration || 0,
+        lrc: song.lrc || '',
+        favoritedAt: song.favoritedAt || Date.now(),
+      },
+    ]));
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `openmusic-favorites-${new Date().toISOString().slice(0, 10)}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }, [favorites]);
 
   useEffect(() => {
     if (!roomId) return;
@@ -185,15 +366,45 @@ export default function Room() {
     }
   }, [isPlaylistResults, searchedKeyword, doSearch]);
 
+  const doPlaylistSearch = useCallback(async (keyword: string, page = 1) => {
+    const trimmed = keyword.trim();
+    if (!trimmed) {
+      setPlaylistSearchResults([]);
+      setPlaylistSearchTotal(0);
+      return;
+    }
+    setSearching(true);
+    setIsPlaylistResults(false);
+    setResults([]);
+    try {
+      const data = await searchNeteasePlaylists(trimmed, page, PLAYLIST_SEARCH_PAGE_SIZE);
+      setPlaylistSearchResults(data.playlists);
+      setPlaylistSearchPage(data.page);
+      setPlaylistSearchTotal(data.total);
+    } catch (err) {
+      setPlaylistSearchResults([]);
+      setPlaylistSearchTotal(0);
+      showToast(err instanceof Error ? err.message : '歌单搜索失败', 'error');
+    } finally {
+      setSearching(false);
+    }
+  }, [showToast]);
+
   const handlePlaylistImport = useCallback(async (platform: PlaylistPlatform, input: string) => {
     setPlaylistImportOpen(false);
     setSearching(true);
     setIsPlaylistResults(true);
+    setSearchMode('song');
+    setPlaylistSearchResults([]);
+    setPlaylistSearchTotal(0);
     setSearchedKeyword(`正在解析${platform === 'netease' ? '网易云' : 'QQ音乐'}歌单…`);
     setResults([]);
 
     try {
       const result = await importPlaylist(platform, input);
+      if (result.playlistId) {
+        rememberPlaylistImportHistory({ platform, playlistId: result.playlistId, name: result.name });
+      }
       setResults(result.songs);
       setSearchedKeyword(`歌单：${result.name}`);
 
@@ -216,14 +427,24 @@ export default function Room() {
 
   const handleSearch = useCallback(() => {
     const keyword = query.trim();
+    if (searchMode === 'playlist') {
+      setSearchedKeyword(keyword);
+      setIsPlaylistResults(false);
+      void doPlaylistSearch(keyword, 1);
+      return;
+    }
     setIsPlaylistResults(false);
+    setPlaylistSearchResults([]);
+    setPlaylistSearchTotal(0);
     setSearchedKeyword(keyword);
     doSearch(keyword);
-  }, [query, doSearch]);
+  }, [query, searchMode, doPlaylistSearch, doSearch]);
 
   const clearSearchResults = useCallback(() => {
     setQuery('');
     setResults([]);
+    setPlaylistSearchResults([]);
+    setPlaylistSearchTotal(0);
     setSearchedKeyword('');
     setIsPlaylistResults(false);
   }, []);
@@ -327,12 +548,19 @@ export default function Room() {
   const qqImportEnabled = sources.some((s) => s.id === 'tencent' && s.supportsSearch);
   const queueCount = (room.current ? 1 : 0) + room.queue.length;
   const showDesktopSearchOverlay = Boolean(searchedKeyword || searching);
+  const showPlaylistSearch = searchMode === 'playlist' && Boolean(searchedKeyword || searching);
+  const hasPlaylistSearchResults = showPlaylistSearch && playlistSearchResults.length > 0;
+  const showPlaylistEmpty = showPlaylistSearch && !searching && playlistSearchResults.length === 0;
+  const playlistSearchTotalPages = Math.max(1, Math.ceil(playlistSearchTotal / PLAYLIST_SEARCH_PAGE_SIZE));
 
   const renderResultsSummary = () => {
     if (searching) {
+      if (showPlaylistSearch) return `正在搜索歌单「${searchedKeyword}」...`;
       return isPlaylistResults ? searchedKeyword : `正在搜索「${searchedKeyword}」...`;
     }
+    if (hasPlaylistSearchResults) return `找到 ${playlistSearchTotal || playlistSearchResults.length} 个相关歌单`; 
     if (results.length === 0) {
+      if (showPlaylistSearch) return '没有找到相关歌单';
       return isPlaylistResults ? '歌单为空或链接无效' : `「${searchedKeyword}」无相关结果`;
     }
     if (isPlaylistResults) {
@@ -362,6 +590,23 @@ export default function Room() {
 
   const searchBar = (
     <div className="flex gap-2 mb-2">
+      <div className="flex flex-shrink-0 overflow-hidden rounded-xl border border-netease-border bg-netease-card p-1 sm:rounded-2xl" title="搜索类型">
+        {([
+          ['song', '歌曲'],
+          ['playlist', '歌单'],
+        ] as const).map(([mode, label]) => (
+          <button
+            key={mode}
+            type="button"
+            onClick={() => setSearchMode(mode)}
+            className={`rounded-lg px-2.5 py-2 text-xs transition-colors sm:px-3 sm:py-2.5 sm:text-sm ${
+              searchMode === mode ? 'bg-netease-red text-white shadow-sm' : 'text-netease-muted hover:text-white'
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
       <div className="relative flex-1 min-w-0">
         <Search className="absolute left-3 sm:left-4 top-1/2 -translate-y-1/2 w-4 sm:w-5 h-4 sm:h-5 text-netease-muted pointer-events-none" />
         <input
@@ -369,7 +614,7 @@ export default function Room() {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-          placeholder="搜索歌曲、歌手..."
+          placeholder={searchMode === 'playlist' ? '搜索网易云歌单...' : '搜索歌曲、歌手...'}
           className="w-full bg-netease-card border border-netease-border rounded-xl sm:rounded-2xl pl-10 sm:pl-12 pr-4 py-3 sm:py-3.5 text-sm sm:text-base text-white placeholder:text-netease-muted/50 focus:outline-none focus:border-netease-red/50 transition-colors"
         />
       </div>
@@ -382,6 +627,43 @@ export default function Room() {
         {searching ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4 sm:hidden" />}
         <span className="hidden sm:inline">搜索</span>
       </button>
+    </div>
+  );
+
+  const playlistSearchList = (
+    <div className="animate-slide-up">
+      <div className="space-y-2">
+        {playlistSearchResults.map((playlist) => (
+          <div key={playlist.id} className="group flex items-center gap-2 rounded-xl p-2.5 transition-colors hover:bg-netease-card/80 sm:gap-3 sm:p-3">
+            <img
+              src={playlist.coverImgUrl || 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect fill="%23333" width="48" height="48"/><text x="24" y="28" text-anchor="middle" fill="%23666" font-size="16">♪</text></svg>'}
+              alt=""
+              className="h-12 w-12 flex-shrink-0 rounded-lg bg-netease-card object-cover"
+            />
+            <div className="min-w-0 flex-1 space-y-0.5">
+              <p className="truncate text-sm font-medium">{playlist.name}</p>
+              <p className="truncate text-xs text-netease-muted">{playlist.creatorName || '网易云歌单'} · {playlist.trackCount} 首</p>
+            </div>
+            <SourceBadge source="netease" variant="muted" />
+            <button
+              type="button"
+              onClick={() => handlePlaylistImport('netease', playlist.id)}
+              disabled={searching}
+              className="flex flex-shrink-0 items-center gap-1 rounded-full bg-netease-red/10 px-2.5 py-1 text-xs font-medium text-netease-red transition-all hover:bg-netease-red hover:text-white disabled:opacity-50"
+            >
+              <ListMusic className="h-4 w-4" />
+              查看
+            </button>
+          </div>
+        ))}
+      </div>
+      {playlistSearchTotalPages > 1 && (
+        <div className="mt-2 flex items-center justify-between border-t border-netease-border/40 pt-4">
+          <button type="button" disabled={playlistSearchPage <= 1 || searching} onClick={() => void doPlaylistSearch(searchedKeyword, playlistSearchPage - 1)} className="rounded-lg px-3 py-1.5 text-sm text-netease-muted transition-colors hover:text-white disabled:cursor-not-allowed disabled:opacity-30">上一页</button>
+          <span className="text-xs text-netease-muted">{playlistSearchPage} / {playlistSearchTotalPages}<span className="ml-1 text-netease-muted/50">共 {playlistSearchTotal} 个</span></span>
+          <button type="button" disabled={playlistSearchPage >= playlistSearchTotalPages || searching} onClick={() => void doPlaylistSearch(searchedKeyword, playlistSearchPage + 1)} className="rounded-lg px-3 py-1.5 text-sm text-netease-muted transition-colors hover:text-white disabled:cursor-not-allowed disabled:opacity-30">下一页</button>
+        </div>
+      )}
     </div>
   );
 
@@ -540,17 +822,28 @@ export default function Room() {
               <JumpRequestBanner />
               {searchBar}
               {searchableCount > 0 && (
-                <div className="flex items-center justify-between gap-2 mb-2 sm:mb-4 px-1">
-                  <p className="text-xs text-netease-muted min-w-0">
-                    同时搜索 {sources.filter((s) => s.supportsSearch).map((s) => s.shortName).join('、')}
-                  </p>
-                  <div className="flex items-center gap-1 flex-shrink-0">
+                <div className="mb-2 flex items-center justify-between gap-2 px-1 sm:mb-4">
+                  <button
+                    type="button"
+                    onClick={() => setNeteaseToplistOpen(true)}
+                    className="rounded-lg px-2 py-1 text-[11px] sm:text-xs text-white/75 hover:bg-white/10 hover:text-white transition-colors whitespace-nowrap"
+                  >
+                    网易云热榜
+                  </button>
+                  <div className="flex min-w-0 flex-shrink-0 items-center gap-1 overflow-x-auto">
                     <button
                       type="button"
-                      onClick={() => setNeteaseToplistOpen(true)}
+                      onClick={() => setSongHistoryOpen(true)}
                       className="rounded-lg px-2 py-1 text-[11px] sm:text-xs text-white/75 hover:bg-white/10 hover:text-white transition-colors whitespace-nowrap"
                     >
-                      网易云热榜
+                      点歌历史
+                    </button>
+                    <button
+                      type="button"
+                      onClick={openFavorites}
+                      className="rounded-lg px-2 py-1 text-[11px] sm:text-xs text-white/75 hover:bg-white/10 hover:text-white transition-colors whitespace-nowrap"
+                    >
+                      我的收藏
                     </button>
                     <button
                       type="button"
@@ -571,7 +864,11 @@ export default function Room() {
 
             {/* 手机：搜索结果内联展示（保持原样） */}
             <div className="lg:hidden">
-              {searching && searchedKeyword && <SearchSkeleton />}
+              {searching && searchedKeyword && (
+                <div className="max-h-56 overflow-hidden rounded-xl">
+                  <SearchSkeleton />
+                </div>
+              )}
 
               {!searching && searchedKeyword && (
                 <div className="flex items-center justify-between mb-2 px-1 gap-2">
@@ -580,7 +877,7 @@ export default function Room() {
                   </span>
                   <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
                     {searchableCount > 0 && !isPlaylistResults && (
-                      <SearchFilterSelect value={searchFilterMode} onChange={handleSearchFilterChange} />
+                      searchMode === 'song' && <SearchFilterSelect value={searchFilterMode} onChange={handleSearchFilterChange} />
                     )}
                     <button
                       type="button"
@@ -594,19 +891,23 @@ export default function Room() {
                 </div>
               )}
 
-              {!searching && searchedKeyword && results.length === 0 && (
+              {!searching && searchedKeyword && !hasPlaylistSearchResults && results.length === 0 && (
                 <p className="text-center text-netease-muted py-4 sm:py-6 animate-fade-in">
-                  {isPlaylistResults ? '歌单为空或链接无效' : '换个关键词试试'}
+                  {showPlaylistEmpty ? '没有找到相关歌单' : (isPlaylistResults ? '歌单为空或链接无效' : '换个关键词试试')}
                 </p>
               )}
 
+              {!searching && hasPlaylistSearchResults && playlistSearchList}
+
               {!searching && searchedKeyword && (
+                !showPlaylistSearch && (
                 <SongResultList
                   results={results}
                   addingId={addingId}
                   onAdd={handleAdd}
                   keyword={searchedKeyword}
                 />
+                )
               )}
             </div>
           </div>
@@ -644,16 +945,12 @@ export default function Room() {
               <div className="min-w-0">
                 <h2 className="text-sm font-medium text-white">{isPlaylistResults ? '歌单' : '搜索结果'}</h2>
                 <p className="text-xs text-netease-muted mt-0.5 truncate">
-                  {searching
-                    ? (isPlaylistResults ? searchedKeyword : `正在搜索「${searchedKeyword}」...`)
-                    : results.length > 0
-                      ? renderResultsSummary()
-                      : (isPlaylistResults ? '歌单为空或链接无效' : `「${searchedKeyword}」无相关结果`)}
+                  {renderResultsSummary()}
                 </p>
               </div>
               <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
                 {!searching && searchableCount > 0 && !isPlaylistResults && (
-                  <SearchFilterSelect value={searchFilterMode} onChange={handleSearchFilterChange} />
+                  searchMode === 'song' && <SearchFilterSelect value={searchFilterMode} onChange={handleSearchFilterChange} />
                 )}
                 <button
                   type="button"
@@ -665,14 +962,16 @@ export default function Room() {
                 </button>
               </div>
             </div>
-            <div className="flex-1 min-h-0 overflow-y-auto p-3">
+            <div className={`flex-1 min-h-0 p-3 ${searching ? 'overflow-hidden' : 'overflow-y-auto'}`}>
               {searching && searchedKeyword && <SearchSkeleton />}
-              {!searching && searchedKeyword && results.length === 0 && (
+              {!searching && searchedKeyword && !hasPlaylistSearchResults && results.length === 0 && (
                 <p className="text-center text-netease-muted py-10 animate-fade-in">
-                  {isPlaylistResults ? '歌单为空或链接无效' : '换个关键词试试'}
+                  {showPlaylistEmpty ? '没有找到相关歌单' : (isPlaylistResults ? '歌单为空或链接无效' : '换个关键词试试')}
                 </p>
               )}
+              {!searching && hasPlaylistSearchResults && playlistSearchList}
               {!searching && searchedKeyword && (
+                !showPlaylistSearch && (
                 <SongResultList
                   results={results}
                   addingId={addingId}
@@ -680,6 +979,7 @@ export default function Room() {
                   keyword={searchedKeyword}
                   alwaysShowActions
                 />
+                )
               )}
             </div>
           </div>
@@ -695,6 +995,149 @@ export default function Room() {
           onImport={handlePlaylistImport}
         />
       )}
+
+      {songHistoryOpen && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center px-4 pt-24 pb-8">
+          <button type="button" className="absolute inset-0 bg-black/65 backdrop-blur-sm" onClick={() => setSongHistoryOpen(false)} aria-label="关闭点歌历史" />
+          <div className="relative z-10 flex max-h-[min(72vh,680px)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-white/10 glass shadow-2xl">
+            <div className="flex items-center justify-between border-b border-netease-border/50 px-4 py-3">
+              <div>
+                <h2 className="text-sm font-medium text-white">点歌历史</h2>
+                <p className="mt-0.5 text-xs text-netease-muted">最近 {room.songHistory?.length || 0} 首，可直接复播</p>
+              </div>
+              <button type="button" onClick={() => setSongHistoryOpen(false)} className="rounded-lg p-1.5 text-netease-muted hover:bg-white/10 hover:text-white"><X className="h-5 w-5" /></button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto p-3">
+              {!room.songHistory?.length ? (
+                <div className="py-16 text-center text-sm text-netease-muted">
+                  <History className="mx-auto mb-2 h-8 w-8 opacity-40" />
+                  暂无点歌历史
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {room.songHistory.map((song: SongHistoryItem, index: number) => {
+                    const key = songKey(song);
+                    return (
+                      <div key={`${song.requestedAt}-${key}-${index}`} className="group flex items-center gap-2 rounded-xl p-2.5 transition-colors hover:bg-netease-card/80 sm:gap-3 sm:p-3">
+                        <img src={getCoverUrl(song)} alt="" className="h-12 w-12 flex-shrink-0 rounded-lg bg-netease-card object-cover" />
+                        <div className="min-w-0 flex-1 space-y-0.5">
+                          <div className="flex min-w-0 items-center gap-2">
+                            <p className="truncate text-sm font-medium">{song.name}</p>
+                            <SourceBadge source={song.source} variant="muted" />
+                          </div>
+                          <p className="truncate text-xs text-netease-muted">{song.artist}{song.album ? ` · ${song.album}` : ''}</p>
+                          <p className="truncate text-[11px] text-netease-muted/80">{song.requestedBy || '匿名'} 点歌{formatHistoryTime(song.requestedAt) ? ` · ${formatHistoryTime(song.requestedAt)}` : ''}</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => void handleAdd(song as SearchResult)}
+                          disabled={addingId === key}
+                          className="flex flex-shrink-0 items-center gap-1 rounded-full bg-netease-red/10 px-2.5 py-1 text-xs font-medium text-netease-red transition-all hover:bg-netease-red hover:text-white disabled:opacity-50"
+                        >
+                          {addingId === key ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+                          复播
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {favoritesOpen && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center px-4 pt-24 pb-8">
+          <button type="button" className="absolute inset-0 bg-black/65 backdrop-blur-sm" onClick={() => setFavoritesOpen(false)} aria-label="关闭收藏" />
+          <div className="relative z-10 flex max-h-[min(72vh,680px)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-white/10 glass shadow-2xl">
+            <div className="flex items-center justify-between border-b border-netease-border/50 px-4 py-3">
+              <div>
+                <h2 className="text-sm font-medium text-white">我的收藏</h2>
+                <p className="mt-0.5 text-xs text-netease-muted">共 {favorites.length} 首，可直接点歌</p>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={handleImportFavoritesJson}
+                  disabled={importingFavorites}
+                  className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs text-netease-muted hover:bg-white/10 hover:text-white disabled:opacity-50"
+                  title="导入收藏 JSON"
+                >
+                  {importingFavorites ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                  {favoritesImportProgress || '导入JSON'}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExportFavoritesJson}
+                  disabled={favorites.length === 0 || importingFavorites}
+                  className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs text-netease-muted hover:bg-white/10 hover:text-white disabled:opacity-50"
+                  title="导出收藏 JSON"
+                >
+                  <Upload className="h-4 w-4" />
+                  导出JSON
+                </button>
+                <button type="button" onClick={() => setFavoritesOpen(false)} className="rounded-lg p-1.5 text-netease-muted hover:bg-white/10 hover:text-white"><X className="h-5 w-5" /></button>
+              </div>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto p-3">
+              <div className="relative mb-3">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-netease-muted" />
+                <input
+                  type="text"
+                  value={favoriteQuery}
+                  onChange={(event) => setFavoriteQuery(event.target.value)}
+                  placeholder="搜索收藏歌名、歌手..."
+                  className="w-full rounded-xl border border-netease-border bg-netease-dark py-2 pl-9 pr-3 text-sm text-white placeholder:text-netease-muted/50 focus:border-netease-red/50 focus:outline-none"
+                />
+              </div>
+              {favoritesLoading ? (
+                <div className="flex justify-center py-16"><Loader2 className="h-6 w-6 animate-spin text-netease-red" /></div>
+              ) : filteredFavorites.length === 0 ? (
+                <div className="py-16 text-center text-sm text-netease-muted">
+                  <Heart className="mx-auto mb-2 h-8 w-8 opacity-40" />
+                  {favorites.length === 0 ? '暂无收藏歌曲' : '没有匹配的收藏歌曲'}
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {filteredFavorites.map((song) => {
+                    const key = songKey(song);
+                    return (
+                      <div key={key} className="group flex items-center gap-2 rounded-xl p-2.5 transition-colors hover:bg-netease-card/80 sm:gap-3 sm:p-3">
+                        <img src={getCoverUrl(song)} alt="" className="h-12 w-12 flex-shrink-0 rounded-lg bg-netease-card object-cover" />
+                        <div className="min-w-0 flex-1 space-y-0.5">
+                          <p className="truncate text-sm font-medium">{song.name}</p>
+                          <p className="truncate text-xs text-netease-muted">{song.artist}{song.album ? ` · ${song.album}` : ''}</p>
+                        </div>
+                        <SourceBadge source={song.source} variant="muted" />
+                        <button
+                          type="button"
+                          onClick={() => void removeFavorite(song)}
+                          disabled={removingFavoriteId === key}
+                          className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-netease-muted transition-colors hover:bg-red-500/10 hover:text-red-300 disabled:opacity-50"
+                          title="取消收藏"
+                        >
+                          {removingFavoriteId === key ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void handleAdd(song as SearchResult)}
+                          disabled={addingId === key}
+                          className="flex flex-shrink-0 items-center gap-1 rounded-full bg-netease-red/10 px-2.5 py-1 text-xs font-medium text-netease-red transition-all hover:bg-netease-red hover:text-white disabled:opacity-50"
+                        >
+                          {addingId === key ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+                          点歌
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
 
       {neteaseToplistOpen && (
         <NeteaseToplistModal
@@ -735,5 +1178,3 @@ export default function Room() {
   );
 
 }
-
-

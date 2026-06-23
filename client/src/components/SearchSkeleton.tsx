@@ -1,7 +1,7 @@
 export default function SearchSkeleton() {
   return (
     <div className="space-y-2 animate-fade-in">
-      {Array.from({ length: 7 }, (_, i) => (
+      {Array.from({ length: 5 }, (_, i) => (
         <div
           key={i}
           className="flex items-center gap-3 p-3 rounded-xl"

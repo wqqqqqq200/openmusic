@@ -5,7 +5,7 @@ import { io, Socket } from 'socket.io-client';
 import { useRoomStore } from '../stores/roomStore';
 import { useAudioStore } from '../stores/audioStore';
 
-import type { ChatMessage, PlaybackState, RoomState, Song } from '../types';
+import type { ChatMention, ChatReplyRef, ChatMessage, FavoriteSong, PlaybackState, RoomState, Song } from '../types';
 
 import { stopSharedAudio } from '../lib/audioElement';
 import { prefetchCurrentSong } from '../lib/songPreloadCache';
@@ -16,6 +16,7 @@ import {
   resetPlaybackScheduling,
 } from '../lib/playbackSchedule';
 import { getClientId, getClientToken, rememberClientIdentity } from '../lib/clientId';
+import { debugLog, setDebugSocketProvider } from '../lib/debugTools';
 
 
 
@@ -139,12 +140,25 @@ export function useSocket() {
 
     const s = getSocket();
 
-    if (socketListenersAttached) return;
+        setDebugSocketProvider(() => ({
+      id: s.id,
+      connected: s.connected,
+      transport: s.io.engine?.transport?.name,
+    }));
+if (socketListenersAttached) return;
     socketListenersAttached = true;
 
 
 
     const onRoomUpdate = (room: RoomState) => {
+      debugLog('room_update', {
+        roomId: room.id,
+        current: room.current?.queueId || null,
+        isPlaying: room.isPlaying,
+        currentTime: room.currentTime,
+        users: room.users.length,
+        randomLoading: room.randomLoading,
+      });
       const { mySocketId, myConnectionId } = useRoomStore.getState();
       const isOwner = Boolean(mySocketId && room.ownerId === mySocketId);
 
@@ -199,11 +213,16 @@ export function useSocket() {
 
     s.on('kicked', onKicked);
 
-    s.on('connect', rejoinLastRoom);
-    s.on('disconnect', () => {
+    s.on('connect', () => {
+      debugLog('socket_connect', { id: s.id, transport: s.io.engine?.transport?.name });
+      rejoinLastRoom();
+    });
+    s.on('disconnect', (reason) => {
+      debugLog('socket_disconnect', { reason });
       useRoomStore.getState().setConnectionInfo(useRoomStore.getState().mySocketId, false, null);
     });
-    s.on('connect_error', () => {
+    s.on('connect_error', (err) => {
+      debugLog('socket_connect_error', { message: err?.message });
       useRoomStore.getState().setConnectionInfo(useRoomStore.getState().mySocketId, false, null);
     });
 
@@ -215,7 +234,12 @@ export function useSocket() {
 
     const s = getSocket();
 
-    if (!connected.current && !socketConnectRequested) {
+        setDebugSocketProvider(() => ({
+      id: s.id,
+      connected: s.connected,
+      transport: s.io.engine?.transport?.name,
+    }));
+if (!connected.current && !socketConnectRequested) {
 
       s.connect();
 
@@ -296,7 +320,12 @@ export function useSocket() {
     resetSession();
 
     const s = getSocket();
-    if (s.connected) {
+        setDebugSocketProvider(() => ({
+      id: s.id,
+      connected: s.connected,
+      transport: s.io.engine?.transport?.name,
+    }));
+if (s.connected) {
       s.timeout(SOCKET_ACK_TIMEOUT_MS).emit('leave_room', {}, () => {});
     }
     return Promise.resolve();
@@ -348,6 +377,11 @@ export function useSocket() {
 
   }, []);
 
+  const toggleQueueLike = useCallback((queueId: string): Promise<{ success: boolean; liked?: boolean; error?: string }> => {
+    return emitWithAck('toggle_queue_like', { queueId }, { success: false, error: '连接超时，请重试' });
+
+  }, []);
+
 
 
   const approveJump = useCallback((requestId: string): Promise<boolean> => {
@@ -385,9 +419,24 @@ export function useSocket() {
 
 
 
-  const sendChat = useCallback((text: string): Promise<{ success: boolean; error?: string }> => {
-    return emitWithAck('send_chat', { text }, { success: false, error: '连接超时，请重试' });
+  const sendChat = useCallback((
+    text: string,
+    options: { mentions?: ChatMention[]; replyTo?: ChatReplyRef | null } = {},
+  ): Promise<{ success: boolean; error?: string }> => {
+    return emitWithAck('send_chat', { text, ...options }, { success: false, error: '连接超时，请重试' });
 
+  }, []);
+
+  const listFavorites = useCallback((): Promise<{ success: boolean; favorites?: FavoriteSong[]; error?: string }> => {
+    return emitWithAck('list_favorites', {}, { success: false, error: '连接超时，请重试' });
+  }, []);
+
+  const setFavorite = useCallback((song: Song, favorite: boolean): Promise<{ success: boolean; favorites?: FavoriteSong[]; favorite?: boolean; error?: string }> => {
+    return emitWithAck('set_favorite', { song, favorite }, { success: false, error: '连接超时，请重试' });
+  }, []);
+
+  const importFavorites = useCallback((songs: Song[]): Promise<{ success: boolean; favorites?: FavoriteSong[]; imported?: number; dropped?: number; maxFavorites?: number; error?: string }> => {
+    return emitWithAck('import_favorites', { songs }, { success: false, error: '导入超时，请稍后重试' });
   }, []);
 
 
@@ -461,6 +510,7 @@ export function useSocket() {
     removeSong,
 
     requestJump,
+    toggleQueueLike,
 
     approveJump,
 
@@ -474,6 +524,11 @@ export function useSocket() {
 
     sendChat,
 
+
+    listFavorites,
+
+    setFavorite,
+    importFavorites,
     renameUser,
 
     kickUser,

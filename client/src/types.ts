@@ -19,6 +19,14 @@ export interface QueueItem extends Song {
   requestedBy: string;
   requestedById?: string;
   addedAt: number;
+  likedByIds?: string[];
+  ownerPriority?: number;
+}
+
+export interface SongHistoryItem extends Song {
+  requestedBy: string;
+  requestedById?: string;
+  requestedAt: number;
 }
 
 export interface RoomUser {
@@ -38,11 +46,25 @@ export interface JumpRequest {
   requestedAt: number;
 }
 
+export interface ChatMention {
+  id: string;
+  nickname: string;
+}
+
+export interface ChatReplyRef {
+  id: string;
+  userId: string;
+  nickname: string;
+  text: string;
+}
+
 export interface ChatMessage {
   id: string;
   userId: string;
   nickname: string;
   text: string;
+  mentions?: ChatMention[];
+  replyTo?: ChatReplyRef | null;
   timestamp: number;
 }
 
@@ -71,6 +93,7 @@ export interface RoomState {
   jumpRequests: JumpRequest[];
   skipRequests: SkipRequest[];
   messages: ChatMessage[];
+  songHistory?: SongHistoryItem[];
   /** 服务端正在为空队列拉取随机歌曲 */
   randomLoading?: boolean;
 }
@@ -114,6 +137,10 @@ export interface LyricLine {
 export interface SearchResult extends Song {
   url?: string;
   lrc?: string;
+}
+
+export interface FavoriteSong extends Song {
+  favoritedAt?: number;
 }
 
 export interface HotSongItem extends Song {

@@ -2,6 +2,7 @@ import './loadEnv.js';
 import express from 'express';
 import cors from 'cors';
 import { createServer } from 'http';
+import { Readable } from 'stream';
 import { Server } from 'socket.io';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -29,6 +30,7 @@ import {
   getRoomInternal,
   buildPlaybackState,
   requestJump,
+  toggleQueueLike,
   approveJump,
   rejectJump,
   requestSkip,
@@ -50,6 +52,7 @@ import {
 } from './cyapi.js';
 import { importNeteasePlaylist, importQqPlaylist } from './playlistImport.js';
 import { fetchNeteaseHotToplist } from './neteaseToplist.js';
+import { importFavoriteSongs, listFavoriteSongs, setFavoriteSong } from './roomStorage.js';
 import { recordSongRequest, getHotSongs } from './songHotRank.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -346,6 +349,56 @@ app.get('/api/music/toplist/netease', async (req, res) => {
   }
 });
 
+app.get('/api/music/netease/playlists/search', async (req, res) => {
+  if (!limitProxyRequest(`playlist-search:${getRequestIp(req)}`)) {
+    return res.status(429).json({ error: '请求过于频繁，请稍后再试' });
+  }
+
+  const keyword = limitText(req.query.keyword || req.query.s, 80);
+  const page = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1);
+  const limit = Math.min(50, Math.max(1, parseInt(String(req.query.limit || '20'), 10) || 20));
+  if (!keyword) return res.json({ playlists: [], total: 0, page, limit });
+
+  const params = new URLSearchParams({
+    csrf_token: '',
+    hlpretag: '',
+    hlposttag: '',
+    s: keyword,
+    type: '1000',
+    offset: String((page - 1) * limit),
+    total: page === 1 ? 'true' : 'false',
+    limit: String(limit),
+  });
+
+  try {
+    const response = await fetchWithTimeout(`https://music.163.com/api/search/get/web?${params.toString()}`, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36',
+        Referer: 'https://music.163.com/',
+      },
+    }, 10000);
+    if (!response.ok) return res.status(response.status).json({ error: '网易云歌单搜索失败' });
+    const data = await response.json();
+    const playlists = Array.isArray(data?.result?.playlists) ? data.result.playlists : [];
+    res.json({
+      page,
+      limit,
+      total: Number(data?.result?.playlistCount || 0),
+      playlists: playlists.map((item) => ({
+        id: String(item.id || ''),
+        name: String(item.name || '未命名歌单'),
+        coverImgUrl: String(item.coverImgUrl || ''),
+        creatorName: String(item.creator?.nickname || ''),
+        trackCount: Number(item.trackCount || 0),
+        playCount: Number(item.playCount || 0),
+      })).filter((item) => item.id),
+    });
+  } catch (err) {
+    console.error('Netease playlist search error:', err.message);
+    res.status(502).json({ error: '网易云歌单搜索失败' });
+  }
+});
+
 app.get('/api/music/sources', (_req, res) => {
   const sources = [
     {
@@ -414,17 +467,30 @@ app.get('/api/media-proxy', async (req, res) => {
   }
 
   try {
-    const response = await fetchWithTimeout(raw, { redirect: 'follow' }, 20000);
+    const headers = {};
+    const range = String(req.headers.range || '').trim();
+    if (range) headers.Range = range;
+
+    const response = await fetchWithTimeout(raw, { headers, redirect: 'follow' }, 20000);
     if (!response.ok) {
       return res.status(response.status).json({ error: '上游媒体请求失败' });
     }
 
     const contentType = response.headers.get('content-type');
     if (contentType) res.set('Content-Type', contentType);
+    for (const header of ['accept-ranges', 'content-length', 'content-range']) {
+      const value = response.headers.get(header);
+      if (value) res.set(header, value);
+    }
     res.set('Cache-Control', 'public, max-age=3600');
 
-    const buffer = Buffer.from(await response.arrayBuffer());
-    res.send(buffer);
+    res.status(response.status);
+    if (response.body) {
+      Readable.fromWeb(response.body).pipe(res);
+    } else {
+      const buffer = Buffer.from(await response.arrayBuffer());
+      res.send(buffer);
+    }
   } catch (err) {
     console.error('Media proxy error:', err.message);
     res.status(502).json({ error: '媒体代理失败' });
@@ -994,6 +1060,26 @@ io.on('connection', (socket) => {
     callback?.({ success: true, room: result.room });
   });
 
+  socket.on('toggle_queue_like', ({ queueId }, callback) => {
+    if (rejectReadOnly(socket, callback)) return;
+    if (rejectRateLimited(socket, limitSocketAction, 'toggle_queue_like', callback)) return;
+
+    const roomId = socketToRoom.get(socket.id);
+    if (!roomId) {
+      callback?.({ success: false, error: '未加入房间' });
+      return;
+    }
+
+    const result = toggleQueueLike(roomId, getSocketUserId(socket), queueId);
+    if (result.error) {
+      callback?.({ success: false, error: result.error });
+      return;
+    }
+
+    io.to(roomId).emit('room_update', result.room);
+    callback?.({ success: true, liked: result.liked, room: result.room });
+  });
+
   socket.on('approve_jump', async ({ requestId }, callback) => {
     if (rejectReadOnly(socket, callback)) return;
     if (rejectRateLimited(socket, limitSocketAction, 'approve_jump', callback)) return;
@@ -1094,7 +1180,7 @@ io.on('connection', (socket) => {
     callback?.({ success: true, room: result.room });
   });
 
-  socket.on('send_chat', ({ text }, callback) => {
+  socket.on('send_chat', ({ text, mentions, replyTo }, callback) => {
     if (rejectReadOnly(socket, callback)) return;
     if (rejectRateLimited(socket, limitSocketChat, 'send_chat', callback)) return;
 
@@ -1104,7 +1190,7 @@ io.on('connection', (socket) => {
       return;
     }
 
-    const result = addChatMessage(roomId, getSocketUserId(socket), text);
+    const result = addChatMessage(roomId, getSocketUserId(socket), text, { mentions, replyTo });
     if (result.error) {
       callback?.({ success: false, error: result.error });
       return;
@@ -1115,6 +1201,50 @@ io.on('connection', (socket) => {
     callback?.({ success: true, message: result.message });
   });
 
+
+  socket.on('list_favorites', async (_payload, callback) => {
+    const userId = getSocketUserId(socket);
+    const favorites = await listFavoriteSongs(userId);
+    callback?.({ success: true, favorites });
+  });
+
+  socket.on('set_favorite', async ({ song, favorite }, callback) => {
+    if (rejectRateLimited(socket, limitSocketAction, 'set_favorite', callback)) return;
+
+    const clean = sanitizeClientSong(song);
+    if (clean.error) {
+      callback?.({ success: false, error: clean.error });
+      return;
+    }
+
+    const result = await setFavoriteSong(getSocketUserId(socket), clean.song, Boolean(favorite));
+    if (result.error) {
+      callback?.({ success: false, error: result.error });
+      return;
+    }
+  callback?.({ success: true, favorites: result.favorites, favorite: result.favorite });
+  });
+
+  socket.on('import_favorites', async ({ songs }, callback) => {
+    if (rejectRateLimited(socket, limitSocketAction, 'import_favorites', callback)) return;
+    if (!Array.isArray(songs) || songs.length === 0 || songs.length > 1000) {
+      callback?.({ success: false, error: '收藏数据格式无效' });
+      return;
+    }
+
+    const cleanSongs = [];
+    for (const song of songs) {
+      const clean = sanitizeClientSong(song);
+      if (!clean.error) cleanSongs.push(clean.song);
+    }
+
+    const result = await importFavoriteSongs(getSocketUserId(socket), cleanSongs);
+    if (result.error) {
+      callback?.({ success: false, error: result.error });
+      return;
+    }
+    callback?.({ success: true, favorites: result.favorites, imported: result.imported, dropped: result.dropped, maxFavorites: result.maxFavorites });
+  });
   socket.on('toggle_play', ({ isPlaying }, callback) => {
     if (rejectReadOnly(socket, callback)) return;
     if (rejectRateLimited(socket, limitSocketAction, 'toggle_play', callback)) return;

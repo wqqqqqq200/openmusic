@@ -13,6 +13,7 @@ import SourceBadge from './SourceBadge';
 
 import ProgressBar from './ProgressBar';
 import VolumeControl from './VolumeControl';
+import FavoriteButton from './FavoriteButton';
 
 
 
@@ -198,22 +199,20 @@ export default function MiniPlayer({ onExpand }: Props) {
 
 
 
-        {isOwner && (
-          <button
-            onClick={handlePlayPause}
-            disabled={trackLoading}
-            className="w-9 h-9 flex items-center justify-center rounded-full bg-white text-black hover:scale-105 transition-transform disabled:opacity-60"
-            title="暂停/播放"
-          >
-            {trackLoading ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : isPlaying ? (
-              <Pause className="w-4 h-4" />
-            ) : (
-              <Play className="w-4 h-4 ml-0.5" />
-            )}
-          </button>
-        )}
+        <button
+          onClick={isOwner ? handlePlayPause : undefined}
+          disabled={trackLoading || !isOwner}
+          className={`w-9 h-9 flex items-center justify-center rounded-full transition-all disabled:opacity-70 ${isOwner ? 'bg-white text-black hover:scale-105' : 'bg-white/10 text-white/70 cursor-not-allowed'}`}
+          title={isOwner ? '暂停/播放' : (isPlaying ? '房主正在播放' : '房主已暂停')}
+        >
+          {trackLoading ? (
+            <Loader2 className="w-4 h-4 animate-spin" />
+          ) : isPlaying ? (
+            <Pause className="w-4 h-4" />
+          ) : (
+            <Play className="w-4 h-4 ml-0.5" />
+          )}
+        </button>
 
         {isOwner ? (
           <button
@@ -240,6 +239,7 @@ export default function MiniPlayer({ onExpand }: Props) {
         )}
 
         <VolumeControl compact className="flex-shrink-0" />
+        <FavoriteButton song={current} className="w-8 h-8 text-netease-muted hover:text-rose-300" />
 
         </div>
 

@@ -138,3 +138,119 @@ export async function deleteRoomFromStorage(roomId) {
     console.error(`Redis: 删除房间 ${roomId} 失败:`, err.message);
   }
 }
+
+const FAVORITES_PREFIX = 'openmusic:favorites:';
+const MAX_FAVORITES = 5000;
+const memoryFavorites = new Map();
+
+function favoriteKey(userId) {
+  return `${FAVORITES_PREFIX}${userId}`;
+}
+
+function songFavoriteId(song) {
+  return `${song?.source || 'netease'}:${song?.id || ''}`;
+}
+
+function normalizeFavoriteSong(song) {
+  if (!song || typeof song !== 'object') return null;
+  const id = String(song.id || '').trim();
+  const source = String(song.source || 'netease').trim();
+  const name = String(song.name || '').trim();
+  const artist = String(song.artist || '').trim();
+  if (!id || !source || !name) return null;
+  return {
+    id,
+    source,
+    name,
+    artist,
+    album: String(song.album || '').trim(),
+    pic: String(song.pic || '').trim(),
+    duration: Number.isFinite(Number(song.duration)) ? Number(song.duration) : undefined,
+    url: song.url ? String(song.url) : undefined,
+    lrc: song.lrc ? String(song.lrc) : undefined,
+    favoritedAt: Date.now(),
+  };
+}
+
+async function readFavorites(userId) {
+  if (!enabled || !redisClient) return memoryFavorites.get(userId) || [];
+  const raw = await redisClient.get(favoriteKey(userId));
+  if (!raw) return [];
+  try {
+    const items = JSON.parse(raw);
+    return Array.isArray(items) ? items : [];
+  } catch {
+    return [];
+  }
+}
+
+function capFavorites(items) {
+  return items.slice(0, MAX_FAVORITES);
+}
+
+async function writeFavorites(userId, items) {
+  const capped = capFavorites(items);
+  if (!enabled || !redisClient) {
+    memoryFavorites.set(userId, capped);
+    return;
+  }
+  await redisClient.set(favoriteKey(userId), JSON.stringify(capped));
+}
+
+export async function listFavoriteSongs(userId) {
+  const id = String(userId || '').trim();
+  if (!id) return [];
+  return readFavorites(id);
+}
+
+export async function setFavoriteSong(userId, song, favorite) {
+  const id = String(userId || '').trim();
+  const clean = normalizeFavoriteSong(song);
+  if (!id || !clean) return { error: '收藏歌曲无效' };
+
+  const items = await readFavorites(id);
+  const favId = songFavoriteId(clean);
+  const exists = items.some((item) => songFavoriteId(item) === favId);
+  let next = items;
+
+  if (favorite && !exists) {
+    next = capFavorites([clean, ...items]);
+  } else if (!favorite && exists) {
+    next = items.filter((item) => songFavoriteId(item) !== favId);
+  }
+
+  await writeFavorites(id, next);
+  return { favorites: next, favorite: Boolean(favorite) };
+}
+
+export async function importFavoriteSongs(userId, songs) {
+  const id = String(userId || '').trim();
+  if (!id) return { error: '用户身份无效' };
+  if (!Array.isArray(songs)) return { error: '收藏数据格式无效' };
+
+  const imported = songs.map(normalizeFavoriteSong).filter(Boolean);
+  if (imported.length === 0) return { error: '没有可导入的歌曲' };
+
+  const items = await readFavorites(id);
+  const merged = [...imported, ...items];
+  const seen = new Set();
+  const next = [];
+  const existingIds = new Set(items.map(songFavoriteId));
+  let added = 0;
+  let uniqueTotal = 0;
+
+  for (const song of merged) {
+    const favId = songFavoriteId(song);
+    if (seen.has(favId)) continue;
+    seen.add(favId);
+    uniqueTotal += 1;
+    if (!existingIds.has(favId)) added += 1;
+    next.push(song);
+    if (next.length >= MAX_FAVORITES) break;
+  }
+
+  const dropped = Math.max(0, uniqueTotal - next.length);
+
+  await writeFavorites(id, next);
+  return { favorites: next, imported: added, dropped, maxFavorites: MAX_FAVORITES };
+}

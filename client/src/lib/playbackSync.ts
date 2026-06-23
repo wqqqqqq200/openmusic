@@ -13,9 +13,9 @@ import {
 } from './audioUnlock';
 
 /**
- * 离散事件同步（非连续 drift 控制）：
- * - NORMAL（距结束 >3s）：不追赶，避免听感扰动
- * - FINAL（距结束 ≤3s）：playbackRate=1，diff>0 时仅一次性 seek 提前对齐
+ * 离散事件同步：
+ * - 自动播放（6s 校准 / 缓冲恢复 / visibility）：NORMAL 不追，FINAL（≤3s）尾部一次性 seek
+ * - 强制同步（用户/房主拖进度条 forceTime、切歌 forceZero、服务端 playback_state forceCorrection）：立即对齐
  */
 const FINAL_WINDOW_SEC = 3;
 
@@ -27,8 +27,11 @@ function durationSources() {
   return { lrcDurationMs, lrcTrackKey, mediaDurationMs, mediaTrackKey };
 }
 
-function isExplicitForce(options: ApplySyncOptions): boolean {
-  return options.forceZero === true || options.forceTime !== undefined;
+/** 用户 seek / 切歌 / 服务端 playback_state：必须立即同步，不受 NORMAL/FINAL 限制 */
+function isMandatorySync(options: ApplySyncOptions): boolean {
+  return options.forceZero === true
+    || options.forceTime !== undefined
+    || options.forceCorrection === true;
 }
 
 export interface ApplySyncOptions {
@@ -37,7 +40,7 @@ export interface ApplySyncOptions {
   tvMode?: boolean;
   forceTime?: number;
   forceZero?: boolean;
-  /** 服务端 playback_state 更新；NORMAL 段不追赶，FINAL 段走收尾规则 */
+  /** 服务端 playback_state（房主 seek / 暂停等）：全员强制对齐 */
   forceCorrection?: boolean;
 }
 
@@ -70,7 +73,9 @@ function lockPlaybackRate(audio: HTMLAudioElement): void {
   resetDriftController(audio);
 }
 
-function explicitHardSeek(audio: HTMLAudioElement, target: number): void {
+function explicitHardSeek(audio: HTMLAudioElement, target: number, trackId?: string): void {
+  if (trackId) ensureFinalSyncTrack(trackId);
+  finalSyncDone = false;
   lockPlaybackRate(audio);
   audio.currentTime = target;
   snapSmoothPlaybackTime(target);
@@ -80,13 +85,13 @@ function shouldSkipRoutineSync(
   audio: HTMLAudioElement,
   options: ApplySyncOptions,
 ): boolean {
-  if (isExplicitForce(options)) return false;
+  if (isMandatorySync(options)) return false;
   if (shouldSkipByBufferingState(false)) return true;
   return isAudioBuffering(audio);
 }
 
-/** NORMAL / FINAL 离散追赶（不含 seek/切歌等显式 force） */
-function applyDiscretePhaseSync(
+/** 自动播放追赶：NORMAL 不动，FINAL 尾部一次性 seek（无 drift） */
+function applyAutoPlaybackSync(
   audio: HTMLAudioElement,
   target: number,
   options: ApplySyncOptions,
@@ -115,22 +120,23 @@ function applyDiscretePhaseSync(
   return 'played';
 }
 
-async function applyExplicitForceSync(
+async function applyMandatorySync(
   audio: HTMLAudioElement,
   options: ApplySyncOptions,
 ): Promise<PlayResult | 'paused' | 'idle'> {
   const state = getClientPlaybackState();
   const target = resolveTargetTime(audio, options);
+  const trackId = state?.trackId || options.song.queueId;
   const isPlaying = state?.status === 'playing';
 
   if (!isPlaying) {
     lockPlaybackRate(audio);
     if (!audio.paused) audio.pause();
-    explicitHardSeek(audio, target);
+    explicitHardSeek(audio, target, trackId);
     return 'paused';
   }
 
-  explicitHardSeek(audio, target);
+  explicitHardSeek(audio, target, trackId);
 
   if (audio.paused) {
     const initial = await tryPlayWithAutoplayFallback(audio, Boolean(options.tvMode));
@@ -147,8 +153,8 @@ export async function applyFollowerSync(
 ): Promise<PlayResult | 'paused' | 'idle'> {
   if (!audio.src) return 'idle';
 
-  if (isExplicitForce(options)) {
-    return applyExplicitForceSync(audio, options);
+  if (isMandatorySync(options)) {
+    return applyMandatorySync(audio, options);
   }
 
   if (shouldSkipRoutineSync(audio, options)) {
@@ -175,7 +181,7 @@ export async function applyFollowerSync(
     return 'played';
   }
 
-  return applyDiscretePhaseSync(audio, target, options);
+  return applyAutoPlaybackSync(audio, target, options);
 }
 
 export async function applyVisibilityResume(
@@ -195,14 +201,14 @@ export async function applyPostBufferSync(
 ): Promise<void> {
   if (!audio.src || audio.paused || audio.ended) return;
   if (getClientPlaybackState()?.status !== 'playing') return;
-  if (isExplicitForce(options)) {
-    await applyExplicitForceSync(audio, options);
+  if (isMandatorySync(options)) {
+    await applyMandatorySync(audio, options);
     return;
   }
   if (shouldSkipRoutineSync(audio, options)) return;
 
   const target = resolveTargetTime(audio, options);
-  applyDiscretePhaseSync(audio, target, options);
+  applyAutoPlaybackSync(audio, target, options);
 }
 
 export function resetPhaseSync(): void {

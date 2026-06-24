@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 
-import { Search, Loader2, Copy, Check, Crown, Tv, LogOut, X, Heart, Trash2, Plus, Download, ListMusic, Upload, History } from 'lucide-react';
+import { Search, Loader2, Copy, Check, Crown, Tv, LogOut, X, Heart, Trash2, Plus, Download, ListMusic, Upload, History, ListPlus } from 'lucide-react';
 
 import { searchAllSongs, getAvailableSources, type SearchFilterMode } from '../api/music';
 import { importPlaylist, searchNeteasePlaylists, type NeteasePlaylistSearchItem, type PlaylistPlatform } from '../api/music/playlist';
@@ -43,6 +43,7 @@ import HotSongPanel from '../components/HotSongPanel';
 import JumpRequestBanner from '../components/JumpRequestBanner';
 import Toast from '../components/Toast';
 import { copyToClipboard } from '../lib/copyToClipboard';
+import { addSongsToQueue, formatBulkAddToast } from '../lib/addSongsToQueue';
 
 
 function roomPasswordKey(roomId: string) {
@@ -152,6 +153,8 @@ export default function Room() {
   const [joinError, setJoinError] = useState('');
 
   const [addingId, setAddingId] = useState<string | null>(null);
+  const [addingPage, setAddingPage] = useState(false);
+  const [listPageSongs, setListPageSongs] = useState<SearchResult[]>([]);
 
   const [copied, setCopied] = useState(false);
   const [tvCopied, setTvCopied] = useState(false);
@@ -447,6 +450,7 @@ export default function Room() {
     setPlaylistSearchTotal(0);
     setSearchedKeyword('');
     setIsPlaylistResults(false);
+    setListPageSongs([]);
   }, []);
 
   const handleAdd = async (song: SearchResult) => {
@@ -471,6 +475,30 @@ export default function Room() {
       showToast(res.error, 'error');
     }
   };
+
+  const handleListPageResultsChange = useCallback((songs: SearchResult[]) => {
+    setListPageSongs(songs);
+  }, []);
+
+  const handleAddMany = useCallback(async (songs: SearchResult[]) => {
+    if (addingPage || songs.length === 0) return;
+    setAddingPage(true);
+    try {
+      const result = await addSongsToQueue(songs, {
+        getRoom: () => useRoomStore.getState().room,
+        addSong,
+      });
+      const toast = formatBulkAddToast(result);
+      showToast(toast.message, toast.type);
+      if (result.added > 0) setHotRefreshKey((k) => k + 1);
+    } finally {
+      setAddingPage(false);
+    }
+  }, [addingPage, addSong, showToast]);
+
+  const handleAddCurrentPage = useCallback(() => {
+    void handleAddMany(listPageSongs);
+  }, [handleAddMany, listPageSongs]);
 
 
 
@@ -569,6 +597,22 @@ export default function Room() {
     }
     return `找到 ${results.length} 首相关歌曲`;
   };
+
+  const showSongListResults = Boolean(
+    !searching && searchedKeyword && !showPlaylistSearch && results.length > 0,
+  );
+
+  const renderBulkAddPageButton = (className = '') => (
+    <button
+      type="button"
+      onClick={handleAddCurrentPage}
+      disabled={addingPage || listPageSongs.length === 0}
+      className={`flex flex-shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-netease-red transition-colors hover:bg-netease-red/10 disabled:cursor-not-allowed disabled:opacity-40 ${className}`}
+    >
+      {addingPage ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ListPlus className="h-3.5 w-3.5" />}
+      一键点歌本页
+    </button>
+  );
 
   const renderQueueSection = (fillHeight = false) => (
     <div
@@ -879,6 +923,7 @@ export default function Room() {
                     {searchableCount > 0 && !isPlaylistResults && (
                       searchMode === 'song' && <SearchFilterSelect value={searchFilterMode} onChange={handleSearchFilterChange} />
                     )}
+                    {showSongListResults && renderBulkAddPageButton()}
                     <button
                       type="button"
                       onClick={clearSearchResults}
@@ -906,6 +951,7 @@ export default function Room() {
                   addingId={addingId}
                   onAdd={handleAdd}
                   keyword={searchedKeyword}
+                  onPageResultsChange={handleListPageResultsChange}
                 />
                 )
               )}
@@ -952,6 +998,7 @@ export default function Room() {
                 {!searching && searchableCount > 0 && !isPlaylistResults && (
                   searchMode === 'song' && <SearchFilterSelect value={searchFilterMode} onChange={handleSearchFilterChange} />
                 )}
+                {showSongListResults && renderBulkAddPageButton('px-2.5 py-1.5')}
                 <button
                   type="button"
                   onClick={clearSearchResults}
@@ -978,6 +1025,7 @@ export default function Room() {
                   onAdd={handleAdd}
                   keyword={searchedKeyword}
                   alwaysShowActions
+                  onPageResultsChange={handleListPageResultsChange}
                 />
                 )
               )}

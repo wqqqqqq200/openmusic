@@ -5,6 +5,7 @@ import { getClientId } from '../lib/clientId';
 import { useSocket } from '../hooks/useSocket';
 import type { ChatMessage, ChatReplyRef, RoomUser } from '../types';
 import {
+  ensureQQFacesLoaded,
   getInitialQQFaces,
   hasFullQQFaces,
   parseQQFaceTokens,
@@ -126,6 +127,11 @@ export default function ChatPanel() {
     setQQFaces(faces);
     setLoadingFaces(!hasFullQQFaces());
   }), []);
+
+  useEffect(() => {
+    if (!showEmoji) return;
+    ensureQQFacesLoaded();
+  }, [showEmoji]);
 
   if (!room) return null;
 

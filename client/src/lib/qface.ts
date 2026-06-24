@@ -36,16 +36,17 @@ const POPULAR_QQ_FACES: QFaceItem[] = [
 ];
 
 const QQ_FACE_TOKEN_RE = /\[qqface:([^\]]+)\]/g;
-const LOAD_RETRY_DELAYS_MS = [0, 600, 1800, 5000, 12000];
-const BACKGROUND_RETRY_MS = 20000;
+const LOAD_RETRY_DELAYS_MS = [0, 1500, 5000];
+const BACKGROUND_RETRY_MS = 30000;
 const FETCH_TIMEOUT_MS = 15000;
 
 const preloadedImageUrls = new Set<string>();
 const faceSubscribers = new Set<(faces: QFaceItem[]) => void>();
 
-let fullFacesCache: QFaceItem[] | null = readStoredFaces();
+let fullFacesCache: QFaceItem[] | null = null;
 let pendingFaces: Promise<QFaceItem[]> | null = null;
 let backgroundRetryTimer: ReturnType<typeof setInterval> | null = null;
+let hydratePromise: Promise<void> | null = null;
 
 function readStoredFaces(): QFaceItem[] | null {
   try {
@@ -60,10 +61,26 @@ function readStoredFaces(): QFaceItem[] | null {
 }
 
 function writeStoredFaces(faces: QFaceItem[]): void {
-  try {
-    localStorage.setItem(QFACE_STORAGE_KEY, JSON.stringify(faces));
-  } catch {
-    // localStorage may be unavailable.
+  const persist = () => {
+    try {
+      localStorage.setItem(QFACE_STORAGE_KEY, JSON.stringify(faces));
+    } catch {
+      // localStorage may be unavailable or quota exceeded.
+    }
+  };
+
+  if (typeof requestIdleCallback !== 'undefined') {
+    requestIdleCallback(persist, { timeout: 3000 });
+  } else {
+    setTimeout(persist, 0);
+  }
+}
+
+function runWhenIdle(task: () => void): void {
+  if (typeof requestIdleCallback !== 'undefined') {
+    requestIdleCallback(task, { timeout: 2000 });
+  } else {
+    setTimeout(task, 0);
   }
 }
 
@@ -137,10 +154,29 @@ async function fetchAndCacheFaces(): Promise<QFaceItem[]> {
   const faces = await fetchQQFaceIndex();
   fullFacesCache = faces;
   writeStoredFaces(faces);
-  preloadQQFaceImages(faces);
   notifyFaceSubscribers();
   stopBackgroundRetry();
   return faces;
+}
+
+function hydrateStoredFaces(): Promise<void> {
+  if (fullFacesCache) return Promise.resolve();
+  if (hydratePromise) return hydratePromise;
+
+  hydratePromise = new Promise((resolve) => {
+    runWhenIdle(() => {
+      const stored = readStoredFaces();
+      if (!stored || fullFacesCache) {
+        resolve();
+        return;
+      }
+      fullFacesCache = stored;
+      notifyFaceSubscribers();
+      resolve();
+    });
+  });
+
+  return hydratePromise;
 }
 
 async function loadWithRetries(): Promise<QFaceItem[]> {
@@ -224,11 +260,14 @@ export async function loadQQFaces(): Promise<QFaceItem[]> {
   return pendingFaces;
 }
 
+export function ensureQQFacesLoaded(): void {
+  void hydrateStoredFaces().then(() => {
+    if (fullFacesCache) return;
+    void loadQQFaces();
+  });
+}
+
 export function initQQFaces(): void {
   preloadQQFaceImages(POPULAR_QQ_FACES);
-  if (fullFacesCache) {
-    preloadQQFaceImages(fullFacesCache);
-    return;
-  }
-  void loadQQFaces();
+  void hydrateStoredFaces();
 }

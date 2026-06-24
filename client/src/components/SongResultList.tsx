@@ -3,7 +3,7 @@ import { Plus, Loader2, ChevronLeft, ChevronRight } from 'lucide-react';
 import type { SearchResult } from '../types';
 import { songKey } from '../api/music';
 import SongCover from './SongCover';
-import SourceBadge from './SourceBadge';
+import SongRowBadges from './SongRowBadges';
 import FavoriteButton from './FavoriteButton';
 
 const PAGE_SIZE = 6;
@@ -14,6 +14,7 @@ interface Props {
   onAdd: (song: SearchResult) => void;
   keyword?: string;
   alwaysShowActions?: boolean;
+  onPageResultsChange?: (songs: SearchResult[]) => void;
 }
 
 export default function SongResultList({
@@ -22,6 +23,7 @@ export default function SongResultList({
   onAdd,
   keyword,
   alwaysShowActions = false,
+  onPageResultsChange,
 }: Props) {
   const [page, setPage] = useState(1);
   const totalPages = Math.max(1, Math.ceil(results.length / PAGE_SIZE));
@@ -29,6 +31,9 @@ export default function SongResultList({
 
   useEffect(() => setPage(1), [keyword]);
   useEffect(() => { if (page > totalPages) setPage(totalPages); }, [page, totalPages]);
+  useEffect(() => {
+    onPageResultsChange?.(pageResults);
+  }, [pageResults, onPageResultsChange]);
 
   if (results.length === 0) return null;
 
@@ -52,7 +57,7 @@ export default function SongResultList({
                 <p className="truncate text-sm font-medium">{song.name}</p>
                 <p className="truncate text-xs text-netease-muted">{song.artist}{song.album ? ` · ${song.album}` : ''}</p>
               </div>
-              <SourceBadge source={song.source} variant="muted" />
+              <SongRowBadges song={song} />
               <FavoriteButton
                 song={song}
                 showOnHover={!alwaysShowActions}

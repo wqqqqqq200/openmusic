@@ -23,7 +23,7 @@ export default function QueuePanel({ fillHeight = false }: Props) {
   const room = useRoomStore((s) => s.room);
   const nickname = useRoomStore((s) => s.nickname);
   const mySocketId = useRoomStore((s) => s.mySocketId);
-  const isOwner = useRoomStore((s) => s.isOwner);
+  const canControlPlayback = useRoomStore((s) => s.canControlPlayback);
   const { removeSong, requestJump, toggleQueueLike } = useSocket();
   const [jumpMsg, setJumpMsg] = useState('');
   const currentRef = useRef<HTMLDivElement>(null);
@@ -52,7 +52,7 @@ export default function QueuePanel({ fillHeight = false }: Props) {
     setJumpMsg('');
     const res = await requestJump(queueId);
     if (res.success) {
-      showQueueMessage(isOwner ? '已插队到下一首，优先于点赞排序' : '已插队到下一首');
+      showQueueMessage(canControlPlayback ? '已插队到下一首，优先于点赞排序' : '已插队到下一首');
     } else {
       showQueueMessage(res.error || '插队失败');
     }
@@ -98,8 +98,8 @@ export default function QueuePanel({ fillHeight = false }: Props) {
           const likedByIds = Array.isArray(song.likedByIds) ? song.likedByIds : [];
           const likeCount = likedByIds.length;
           const likedByMe = Boolean(myUserId && likedByIds.includes(myUserId));
-          const canJump = !song.isCurrent && (isOwner || isMine);
-          const canRemove = !song.isCurrent && (isOwner || isMine);
+          const canJump = !song.isCurrent && (canControlPlayback || isMine);
+          const canRemove = !song.isCurrent && (canControlPlayback || isMine);
           const hasSourceError = isTrackSourceError(song);
 
           return (
@@ -179,7 +179,7 @@ export default function QueuePanel({ fillHeight = false }: Props) {
                         <button
                           onClick={() => handleJumpRequest(song.queueId)}
                           className="rounded-lg p-1 text-amber-400/75 transition-colors hover:bg-amber-400/10 hover:text-amber-300"
-                          title={isOwner ? '房主插队，优先于点赞排序' : '插队到下一首'}
+                          title={canControlPlayback ? '管理员插队，优先于点赞排序' : '插队到下一首'}
                         >
                           <Zap className="h-3.5 w-3.5" />
                         </button>
@@ -188,7 +188,7 @@ export default function QueuePanel({ fillHeight = false }: Props) {
                         <button
                           onClick={() => removeSong(song.queueId)}
                           className="rounded-lg p-1 text-netease-muted transition-colors hover:bg-netease-red/10 hover:text-netease-red"
-                          title={isOwner && !isMine ? '移除歌曲' : '删除我的点歌'}
+                          title={canControlPlayback && !isMine ? '移除歌曲' : '删除我的点歌'}
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                         </button>

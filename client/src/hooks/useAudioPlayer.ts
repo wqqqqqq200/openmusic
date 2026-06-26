@@ -105,7 +105,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
   const controller = getAudioController();
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const room = useRoomStore((s) => s.room);
-  const isOwner = useRoomStore((s) => s.isOwner);
+  const isPlaybackLeader = useRoomStore((s) => s.isPlaybackLeader);
   const trackLoading = useAudioStore((s) => s.trackLoading);
   const setTrackLoading = useAudioStore((s) => s.setTrackLoading);
   const setLrcDuration = useAudioStore((s) => s.setLrcDuration);
@@ -128,7 +128,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
   const errorRetries = useRef(0);
   const urlRefreshAttempted = useRef(false);
   const lastSkipAt = useRef(0);
-  const wasOwnerRef = useRef(isOwner);
+  const wasLeaderRef = useRef(isPlaybackLeader);
 
   const playAudio = useCallback(async (audio: HTMLAudioElement) => {
     const result = await tryPlayWithAutoplayFallback(audio, tvMode);
@@ -240,8 +240,8 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
 
   const requestSkip = useCallback((options: { bypassThrottle?: boolean } = {}) => {
     if (skippingRef.current) return;
-    const { isOwner, room: live } = useRoomStore.getState();
-    if (!isOwner) return;
+    const { isPlaybackLeader, room: live } = useRoomStore.getState();
+    if (!isPlaybackLeader) return;
 
     const now = Date.now();
     if (!options.bypassThrottle && now - lastSkipAt.current < 2000) return;
@@ -295,7 +295,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
         if (runtime.readyTrackKey.current !== trackKey) return;
         runtime.endedTrackKey.current = trackKey;
         audio.pause();
-        if (live.isOwner) {
+        if (useRoomStore.getState().isPlaybackLeader) {
           runtime.finishSong(current.queueId);
         }
       });
@@ -304,7 +304,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
         const runtime = activeAudioRuntime;
         if (!runtime) return;
         const live = useRoomStore.getState();
-        if (!live.isOwner || !live.room?.current || runtime.skippingRef.current) return;
+        if (!useRoomStore.getState().isPlaybackLeader || !live.room?.current || runtime.skippingRef.current) return;
         if (runtime.readyTrackKey.current !== trackKeyOf(live.room.current)) return;
 
         if (runtime.errorRetries.current < 2) {
@@ -454,7 +454,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
 
     if (isTrackSourceError(current)) {
       setTrackLoading(false);
-      if (useRoomStore.getState().isOwner) {
+      if (useRoomStore.getState().isPlaybackLeader) {
         requestSkip({ bypassThrottle: true });
       }
       return;
@@ -489,7 +489,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
           if (gen !== loadGeneration.current) return;
           readyTrackKey.current = null;
           setTrackLoading(false);
-          if (useRoomStore.getState().isOwner) {
+          if (useRoomStore.getState().isPlaybackLeader) {
             requestSkip();
           }
           return;
@@ -568,7 +568,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
         console.error('Failed to load song:', err);
         if (gen !== loadGeneration.current) return;
         readyTrackKey.current = null;
-        if (useRoomStore.getState().isOwner) {
+        if (useRoomStore.getState().isPlaybackLeader) {
           requestSkip();
         }
       } finally {
@@ -663,18 +663,18 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
     return () => setAudioBufferEndHandler(null);
   }, [controller, tvMode]);
 
-  // 刚成为房主：对齐服务端时间轴
+  // 刚成为播放主控：对齐服务端时间轴
   useEffect(() => {
-    const becameOwner = isOwner && !wasOwnerRef.current;
-    wasOwnerRef.current = isOwner;
-    if (!becameOwner || tvMode || trackLoading) return;
+    const becameLeader = isPlaybackLeader && !wasLeaderRef.current;
+    wasLeaderRef.current = isPlaybackLeader;
+    if (!becameLeader || tvMode || trackLoading) return;
 
     const current = room?.current;
     if (!current) return;
     if (readyTrackKey.current !== trackKeyOf(current)) return;
 
     applySync();
-  }, [isOwner, tvMode, room?.current?.queueId, trackLoading, applySync]);
+  }, [isPlaybackLeader, tvMode, room?.current?.queueId, trackLoading, applySync]);
 
   // visibilitychange：切走时不做任何事；切回时仅软恢复（浏览器暂停了才 play）
   useEffect(() => {

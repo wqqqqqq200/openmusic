@@ -3,12 +3,12 @@ import { createPortal } from 'react-dom';
 
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 
-import { Search, Loader2, Copy, Check, Crown, Tv, LogOut, X, Heart, Trash2, Plus, Download, ListMusic, Upload, History, ListPlus, Pencil, Lock, LockOpen, SlidersHorizontal } from 'lucide-react';
+import { Search, Loader2, Copy, Check, Crown, Tv, LogOut, X, Heart, Plus, Download, ListMusic, Upload, History, ListPlus, Pencil, Lock, LockOpen, Radio } from 'lucide-react';
 
 import { searchAllSongs, getAvailableSources, type SearchFilterMode } from '../api/music';
 import { importPlaylist, searchPlaylists, type PlaylistSearchItem, type PlaylistPlatform } from '../api/music/playlist';
-import { normalizeRoomAudioQuality } from '../api/music/quality';
-import { clearSongUrlCache } from '../lib/songPreloadCache';
+import { normalizeFmMode } from '../api/music/fmMode';
+import { addSongsToQueue, formatBulkAddToast } from '../lib/addSongsToQueue';
 import { rememberPlaylistImportHistory } from '../components/PlaylistImportModal';
 
 import type { FavoriteSong, MusicSource, SearchResult, Song, SongHistoryItem } from '../types';
@@ -43,15 +43,15 @@ import PlaylistImportModal from '../components/PlaylistImportModal';
 import ChatPanel from '../components/ChatPanel';
 import HotSongPanel from '../components/HotSongPanel';
 import RecommendedPlaylistsPanel from '../components/RecommendedPlaylistsPanel';
+import FavoriteButton from '../components/FavoriteButton';
 import { useMediaQuery } from '../hooks/useMediaQuery';
 import { useSongHistoryStore } from '../stores/songHistoryStore';
 
-import RoomQualityModal from '../components/RoomQualityModal';
-import RoomQualityBadge from '../components/RoomQualityBadge';
+import RoomFmModeBadge from '../components/RoomFmModeBadge';
+import RoomFmModeModal from '../components/RoomFmModeModal';
 import JumpRequestBanner from '../components/JumpRequestBanner';
 import Toast from '../components/Toast';
 import { copyToClipboard } from '../lib/copyToClipboard';
-import { addSongsToQueue, formatBulkAddToast } from '../lib/addSongsToQueue';
 
 
 function roomPasswordKey(roomId: string) {
@@ -130,6 +130,7 @@ function formatHistoryTime(time: number) {
 
 const PLAYLIST_SEARCH_PAGE_SIZE = 6;
 const FAVORITES_IMPORT_BATCH_SIZE = 500;
+const FAVORITES_PAGE_SIZE = 15;
 type SearchMode = 'song' | 'playlist';
 
 
@@ -143,7 +144,7 @@ export default function Room() {
 
   const roomPassword = (location.state as { password?: string } | null)?.password || getStoredRoomPassword(roomId);
 
-  const { room, showPlayer, setShowPlayer, isOwner, mySocketId, exitReason } = useRoomStore();
+  const { room, showPlayer, setShowPlayer, isOwner, isAdmin, mySocketId, exitReason } = useRoomStore();
 
   usePageSeo({
     title: room?.name ? `${room.name} 房间` : '正在加入房间',
@@ -154,7 +155,7 @@ export default function Room() {
     noindex: true,
   });
 
-  const { joinRoom, addSong, leaveRoom, listFavorites, setFavorite, importFavorites, renameRoomName, setRoomLock, setRoomAudioQuality, loadSongHistory } = useSocket();
+  const { joinRoom, addSong, leaveRoom, listFavorites, setFavorite, importFavorites, renameRoomName, setRoomLock, setRoomFmMode, loadSongHistory } = useSocket();
   const { applyFavorites } = useFavorites();
 
 
@@ -192,7 +193,9 @@ export default function Room() {
   const [favoritesLoading, setFavoritesLoading] = useState(false);
   const [favorites, setFavorites] = useState<FavoriteSong[]>([]);
   const [favoriteQuery, setFavoriteQuery] = useState('');
+  const [favoritePage, setFavoritePage] = useState(1);
   const [removingFavoriteId, setRemovingFavoriteId] = useState<string | null>(null);
+  const [addingAllFavorites, setAddingAllFavorites] = useState(false);
   const [importingFavorites, setImportingFavorites] = useState(false);
   const [favoritesImportProgress, setFavoritesImportProgress] = useState('');
   const [renameOpen, setRenameOpen] = useState(false);
@@ -201,8 +204,8 @@ export default function Room() {
   const [lockOpen, setLockOpen] = useState(false);
   const [lockPassword, setLockPassword] = useState('');
   const [lockSaving, setLockSaving] = useState(false);
-  const [qualityOpen, setQualityOpen] = useState(false);
-  const [qualitySaving, setQualitySaving] = useState(false);
+  const [fmOpen, setFmOpen] = useState(false);
+  const [fmSaving, setFmSaving] = useState(false);
   const songHistoryItems = useSongHistoryStore((s) => s.songs);
   const songHistoryLoading = useSongHistoryStore((s) => s.loading);
 
@@ -277,8 +280,25 @@ export default function Room() {
     return [song.name, song.artist, song.album, song.lrc].some((value) => String(value || '').toLowerCase().includes(keyword));
   });
 
+  const favoriteTotalPages = Math.max(1, Math.ceil(filteredFavorites.length / FAVORITES_PAGE_SIZE));
+  const pagedFavorites = filteredFavorites.slice(
+    (favoritePage - 1) * FAVORITES_PAGE_SIZE,
+    favoritePage * FAVORITES_PAGE_SIZE,
+  );
+
+  useEffect(() => {
+    setFavoritePage(1);
+  }, [favoriteQuery, favorites.length]);
+
+  useEffect(() => {
+    if (favoritePage > favoriteTotalPages) {
+      setFavoritePage(favoriteTotalPages);
+    }
+  }, [favoritePage, favoriteTotalPages]);
+
   const openFavorites = useCallback(async () => {
     setFavoritesOpen(true);
+    setFavoritePage(1);
     setFavoritesLoading(true);
     const res = await listFavorites();
     setFavoritesLoading(false);
@@ -305,6 +325,22 @@ export default function Room() {
       showToast(res.error || '取消收藏失败', 'error');
     }
   }, [setFavorite, showToast, applyFavorites]);
+
+  const handleAddAllFavorites = useCallback(async () => {
+    if (addingAllFavorites || filteredFavorites.length === 0) return;
+    setAddingAllFavorites(true);
+    try {
+      const result = await addSongsToQueue(filteredFavorites, {
+        getRoom: () => useRoomStore.getState().room,
+        addSong,
+      });
+      const toast = formatBulkAddToast(result);
+      showToast(toast.message, toast.type);
+      if (result.added > 0) setHotRefreshKey((k) => k + 1);
+    } finally {
+      setAddingAllFavorites(false);
+    }
+  }, [addingAllFavorites, filteredFavorites, addSong, showToast]);
 
   const handleImportFavoritesJson = useCallback(() => {
     const input = document.createElement('input');
@@ -588,29 +624,22 @@ export default function Room() {
     }
   }, [addingPage, addSong, showToast]);
 
-  const handleSaveRoomQuality = useCallback(async (quality: ReturnType<typeof normalizeRoomAudioQuality>) => {
-    if (qualitySaving) return;
-    setQualitySaving(true);
-    const res = await setRoomAudioQuality(quality);
-    setQualitySaving(false);
+  const handleSaveFmMode = useCallback(async (mode: string) => {
+    if (fmSaving) return;
+    setFmSaving(true);
+    const res = await setRoomFmMode(mode);
+    setFmSaving(false);
     if (res.success) {
-      clearSongUrlCache();
-      showToast('音质已更新', 'success');
+      setFmOpen(false);
+      showToast('漫游模式已更新', 'success');
     } else {
-      showToast(res.error || '音质设置失败', 'error');
+      showToast(res.error || '漫游模式设置失败', 'error');
     }
-  }, [qualitySaving, setRoomAudioQuality, showToast]);
+  }, [fmSaving, setRoomFmMode, showToast]);
 
   const handleAddCurrentPage = useCallback(() => {
     void handleAddMany(listPageSongs);
   }, [handleAddMany, listPageSongs]);
-
-  useEffect(() => {
-    if (!room?.audioQuality) return;
-    clearSongUrlCache();
-  }, [room?.audioQuality?.netease, room?.audioQuality?.tencent]);
-
-
 
   const handleCopyRoom = async () => {
     const url = `${window.location.origin}/room/${room?.id}`;
@@ -875,12 +904,12 @@ export default function Room() {
         />
       )}
 
-      <RoomQualityModal
-        open={qualityOpen}
-        value={normalizeRoomAudioQuality(room?.audioQuality)}
-        saving={qualitySaving}
-        onClose={() => setQualityOpen(false)}
-        onSave={handleSaveRoomQuality}
+      <RoomFmModeModal
+        open={fmOpen}
+        value={normalizeFmMode(room?.neteaseFmMode)}
+        saving={fmSaving}
+        onClose={() => setFmOpen(false)}
+        onSave={handleSaveFmMode}
       />
 
       <header className="glass flex-shrink-0 z-30 border-b border-netease-border/50 px-3 sm:px-4 py-2.5 sm:py-3 safe-top">
@@ -938,14 +967,20 @@ export default function Room() {
 
                 )}
 
+                {isAdmin && !isOwner && (
+                  <span className="flex items-center gap-0.5 text-[10px] text-sky-300/90 bg-sky-400/10 px-1.5 py-0.5 rounded-full flex-shrink-0">
+                    管理员
+                  </span>
+                )}
+
                 {isOwner && (
                   <button
                     type="button"
-                    onClick={() => setQualityOpen(true)}
+                    onClick={() => setFmOpen(true)}
                     className="flex-shrink-0 rounded-lg p-1 text-netease-muted transition-colors hover:bg-white/10 hover:text-white"
-                    title="调整音质"
+                    title="私人漫游模式"
                   >
-                    <SlidersHorizontal className="w-3.5 h-3.5" />
+                    <Radio className="w-3.5 h-3.5" />
                   </button>
                 )}
 
@@ -957,7 +992,7 @@ export default function Room() {
 
               <div className="mt-0.5 flex flex-wrap items-center gap-2">
                 <p className="text-xs text-netease-muted">{room.userCount} 人在线</p>
-                <RoomQualityBadge audioQuality={room.audioQuality} />
+                <RoomFmModeBadge fmMode={room.neteaseFmMode} />
               </div>
 
             </div>
@@ -966,7 +1001,6 @@ export default function Room() {
 
               <OnlineUsers
                 users={room.users}
-                ownerId={room.ownerId}
                 creatorId={room.creatorId}
                 onNotice={showToast}
               />
@@ -1029,7 +1063,6 @@ export default function Room() {
 
               <OnlineUsers
                 users={room.users}
-                ownerId={room.ownerId}
                 creatorId={room.creatorId}
                 onNotice={showToast}
               />
@@ -1254,7 +1287,7 @@ export default function Room() {
             <div className="flex items-center justify-between border-b border-netease-border/50 px-4 py-3">
               <div>
                 <h2 className="text-sm font-medium text-white">播放历史</h2>
-                <p className="mt-0.5 text-xs text-netease-muted">最近 {songHistoryItems.length} 首，可直接复播</p>
+                <p className="mt-0.5 text-xs text-netease-muted">最近 {songHistoryItems.length} 首，可复播或收藏</p>
               </div>
               <button type="button" onClick={() => setSongHistoryOpen(false)} className="rounded-lg p-1.5 text-netease-muted hover:bg-white/10 hover:text-white"><X className="h-5 w-5" /></button>
             </div>
@@ -1284,6 +1317,7 @@ export default function Room() {
                           <p className="truncate text-xs text-netease-muted">{song.artist}{song.album ? ` · ${song.album}` : ''}</p>
                           <p className="truncate text-[11px] text-netease-muted/80">{song.requestedBy || '匿名'} 播放{formatHistoryTime(song.requestedAt) ? ` · ${formatHistoryTime(song.requestedAt)}` : ''}</p>
                         </div>
+                        <FavoriteButton song={song} className="h-8 w-8 text-netease-muted hover:text-rose-300" />
                         <button
                           type="button"
                           onClick={() => void handleAdd(song as SearchResult)}
@@ -1310,28 +1344,40 @@ export default function Room() {
             <div className="flex items-center justify-between border-b border-netease-border/50 px-4 py-3">
               <div>
                 <h2 className="text-sm font-medium text-white">我的收藏</h2>
-                <p className="mt-0.5 text-xs text-netease-muted">共 {favorites.length} 首，可直接点歌</p>
+                <p className="mt-0.5 text-xs text-netease-muted">
+                  共 {favorites.length} 首{favoriteQuery.trim() ? `，筛选 ${filteredFavorites.length} 首` : ''}
+                </p>
               </div>
               <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => void handleAddAllFavorites()}
+                  disabled={filteredFavorites.length === 0 || addingAllFavorites || importingFavorites}
+                  className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs text-netease-red hover:bg-netease-red/10 hover:text-netease-red disabled:opacity-50"
+                  title="一键点歌"
+                >
+                  {addingAllFavorites ? <Loader2 className="h-4 w-4 animate-spin" /> : <ListPlus className="h-4 w-4" />}
+                  一键点歌
+                </button>
                 <button
                   type="button"
                   onClick={handleImportFavoritesJson}
                   disabled={importingFavorites}
                   className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs text-netease-muted hover:bg-white/10 hover:text-white disabled:opacity-50"
-                  title="导入收藏 JSON"
+                  title="导入歌单"
                 >
                   {importingFavorites ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-                  {favoritesImportProgress || '导入JSON'}
+                  {favoritesImportProgress || '导入歌单'}
                 </button>
                 <button
                   type="button"
                   onClick={handleExportFavoritesJson}
                   disabled={favorites.length === 0 || importingFavorites}
                   className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs text-netease-muted hover:bg-white/10 hover:text-white disabled:opacity-50"
-                  title="导出收藏 JSON"
+                  title="导出歌单"
                 >
                   <Upload className="h-4 w-4" />
-                  导出JSON
+                  导出歌单
                 </button>
                 <button type="button" onClick={() => setFavoritesOpen(false)} className="rounded-lg p-1.5 text-netease-muted hover:bg-white/10 hover:text-white"><X className="h-5 w-5" /></button>
               </div>
@@ -1357,26 +1403,32 @@ export default function Room() {
                   {favorites.length === 0 ? '暂无收藏歌曲' : '没有匹配的收藏歌曲'}
                 </div>
               ) : (
+                <>
                 <div className="space-y-2">
-                  {filteredFavorites.map((song) => {
+                  {pagedFavorites.map((song) => {
                     const key = songKey(song);
                     return (
                       <div key={key} className="group flex items-center gap-2 rounded-xl p-2.5 transition-colors hover:bg-netease-card/80 sm:gap-3 sm:p-3">
+                        <button
+                          type="button"
+                          onClick={() => void removeFavorite(song)}
+                          disabled={removingFavoriteId === key}
+                          className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full text-rose-300 transition-colors hover:bg-rose-500/10 disabled:opacity-50"
+                          title="取消收藏"
+                          aria-label="取消收藏"
+                        >
+                          {removingFavoriteId === key ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <span className="text-base leading-none">❤</span>
+                          )}
+                        </button>
                         <SongCover song={song} className="h-12 w-12 flex-shrink-0 rounded-lg bg-netease-card object-cover" />
                         <div className="min-w-0 flex-1 space-y-0.5">
                           <p className="truncate text-sm font-medium">{song.name}</p>
                           <p className="truncate text-xs text-netease-muted">{song.artist}{song.album ? ` · ${song.album}` : ''}</p>
                         </div>
                         <SourceBadge source={song.source} variant="muted" />
-                        <button
-                          type="button"
-                          onClick={() => void removeFavorite(song)}
-                          disabled={removingFavoriteId === key}
-                          className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-netease-muted transition-colors hover:bg-red-500/10 hover:text-red-300 disabled:opacity-50"
-                          title="取消收藏"
-                        >
-                          {removingFavoriteId === key ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-                        </button>
                         <button
                           type="button"
                           onClick={() => void handleAdd(song as SearchResult)}
@@ -1390,6 +1442,30 @@ export default function Room() {
                     );
                   })}
                 </div>
+                {filteredFavorites.length > FAVORITES_PAGE_SIZE && (
+                  <div className="mt-3 flex items-center justify-between border-t border-netease-border/40 pt-3 text-xs text-netease-muted">
+                    <span>第 {favoritePage} / {favoriteTotalPages} 页</span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={favoritePage <= 1}
+                        onClick={() => setFavoritePage((page) => Math.max(1, page - 1))}
+                        className="rounded-lg px-2.5 py-1 hover:bg-white/10 hover:text-white disabled:opacity-40"
+                      >
+                        上一页
+                      </button>
+                      <button
+                        type="button"
+                        disabled={favoritePage >= favoriteTotalPages}
+                        onClick={() => setFavoritePage((page) => Math.min(favoriteTotalPages, page + 1))}
+                        className="rounded-lg px-2.5 py-1 hover:bg-white/10 hover:text-white disabled:opacity-40"
+                      >
+                        下一页
+                      </button>
+                    </div>
+                  </div>
+                )}
+                </>
               )}
             </div>
           </div>
@@ -1398,20 +1474,9 @@ export default function Room() {
 
 
 
-      {room.current ? (
-
+      {(room.current || room.randomLoading) && (
         <MiniPlayer onExpand={() => setShowPlayer(true)} />
-
-      ) : room.randomLoading ? (
-
-        <div className="fixed bottom-0 left-0 right-0 z-40 glass border-t border-netease-border/50 pb-[env(safe-area-inset-bottom,0px)]">
-          <div className="max-w-5xl mx-auto flex items-center gap-3 px-3 sm:px-4 py-3.5 sm:py-4">
-            <Loader2 className="w-5 h-5 text-netease-red animate-spin flex-shrink-0" />
-            <p className="text-sm text-netease-muted">正在加载随机歌曲...</p>
-          </div>
-        </div>
-
-      ) : null}
+      )}
 
 
 

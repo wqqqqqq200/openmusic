@@ -1,6 +1,6 @@
 import { customAlphabet } from 'nanoid';
 import { scryptSync, randomBytes, timingSafeEqual } from 'crypto';
-import { fetchRandomSong } from './cyapi.js';
+import { fetchMetingFmSong, normalizeFmMode, DEFAULT_FM_MODE } from './metingFm.js';
 import {
   initRoomStorage,
   isRedisEnabled,
@@ -32,7 +32,7 @@ const QUALITY_ALIASES = {
 };
 
 function normalizeRoomAudioQuality(input) {
-  const rawNetease = String(input?.netease || 'lossless');
+  const rawNetease = String(input?.netease || 'hires');
   const rawTencent = String(input?.tencent || 'lossless');
   const netease = QUALITY_ALIASES[rawNetease] || rawNetease;
   const tencent = QUALITY_ALIASES[rawTencent] || rawTencent;
@@ -129,7 +129,9 @@ function snapshotRoomForStorage(room) {
     skipRequests: room.skipRequests,
     randomPlayedKeys: Array.from(room.randomPlayedKeys),
     nextRandom: serializeSongMeta(room.nextRandom),
-    audioQuality: room.audioQuality ?? { netease: 'lossless', tencent: 'lossless' },
+    adminIds: Array.from(room.adminIds || []),
+    audioQuality: room.audioQuality ?? { netease: 'hires', tencent: 'lossless' },
+    neteaseFmMode: normalizeFmMode(room.neteaseFmMode),
     createdAt: room.createdAt,
   };
 }
@@ -157,7 +159,9 @@ function restoreRoomFromStorage(data) {
   room.isLocked = Boolean(data.isLocked);
   room.muteAll = Boolean(data.muteAll);
   room.mutedUserIds = new Set(data.mutedUserIds || []);
+  room.adminIds = new Set(Array.isArray(data.adminIds) ? data.adminIds : []);
   room.audioQuality = normalizeRoomAudioQuality(data.audioQuality);
+  room.neteaseFmMode = normalizeFmMode(data.neteaseFmMode);
   room.createdAt = data.createdAt ?? Date.now();
 
   if (room.isPlaying && room.current) {
@@ -295,14 +299,18 @@ function createEmptyRoom(roomId, name, passwordHash = null) {
     randomLoading: false,
     playbackLock: null,
     autoAdvancePromise: null,
+    adminIds: new Set(),
     audioQuality: {
-      netease: 'lossless',
+      netease: 'hires',
       tencent: 'lossless',
     },
+    neteaseFmMode: DEFAULT_FM_MODE,
     createdAt: Date.now(),
     destroyTimer: null,
   };
 }
+
+const MAX_ADMINS = 3;
 
 function getNextOwnerId(room) {
   return Array.from(room.users.values())
@@ -312,6 +320,40 @@ function getNextOwnerId(room) {
 
 function isEligibleOwner(user) {
   return Boolean(user && !user.readOnly);
+}
+
+function ensureAdminIds(room) {
+  if (!room.adminIds) room.adminIds = new Set();
+  return room.adminIds;
+}
+
+function pruneAdminIds(room) {
+  const admins = ensureAdminIds(room);
+  for (const id of admins) {
+    if (!isEligibleOwner(room.users.get(id))) admins.delete(id);
+  }
+}
+
+function getOrderedAdminIds(room) {
+  pruneAdminIds(room);
+  return Array.from(room.adminIds)
+    .sort((a, b) => (room.users.get(a)?.joinedAt || 0) - (room.users.get(b)?.joinedAt || 0));
+}
+
+function isAdminUser(room, userId) {
+  if (!userId) return false;
+  pruneAdminIds(room);
+  return room.adminIds.has(userId);
+}
+
+function canControlPlayback(room, userId) {
+  if (!room || !userId) return false;
+  if (isRoomCreator(room, userId) && isEligibleOwner(room.users.get(userId))) return true;
+  return isAdminUser(room, userId);
+}
+
+function removeUserFromAdmins(room, userId) {
+  if (userId) ensureAdminIds(room).delete(userId);
 }
 
 function sanitizeCreatorId(value) {
@@ -329,32 +371,33 @@ function ensureCreatorId(room, userId) {
 }
 
 /**
- * 刷新房主：现任房主有效则保留；无效时优先创建者，否则最早加入者。
- * preferCreator：创建者重新加入时强制恢复房主。
+ * 刷新播放主控：初创房主在线时由其驱动播放；离线时由管理员接管（仅播放权，不顺位房主）。
  */
 function refreshRoomOwner(room, options = {}) {
   const { preferCreator = false } = options;
 
-  if (preferCreator) {
-    const creator = room.creatorId ? room.users.get(room.creatorId) : null;
-    if (isEligibleOwner(creator)) {
-      room.ownerId = room.creatorId;
-      refreshOwnerConnection(room);
-      return;
-    }
-  }
+  const creator = room.creatorId ? room.users.get(room.creatorId) : null;
+  const creatorOnline = isEligibleOwner(creator);
 
-  const owner = room.ownerId ? room.users.get(room.ownerId) : null;
-  if (isEligibleOwner(owner)) {
+  if ((preferCreator || creatorOnline) && creatorOnline) {
+    room.ownerId = room.creatorId;
     refreshOwnerConnection(room);
     return;
   }
 
-  const creator = room.creatorId ? room.users.get(room.creatorId) : null;
-  if (isEligibleOwner(creator)) {
-    room.ownerId = room.creatorId;
+  const admins = getOrderedAdminIds(room);
+  if (admins.length > 0) {
+    room.ownerId = admins[0];
+    refreshOwnerConnection(room);
+    return;
+  }
+
+  const nextId = getNextOwnerId(room);
+  if (nextId) {
+    ensureAdminIds(room).add(nextId);
+    room.ownerId = nextId;
   } else {
-    room.ownerId = getNextOwnerId(room);
+    room.ownerId = null;
   }
   refreshOwnerConnection(room);
 }
@@ -599,6 +642,62 @@ export function setRoomLock(roomId, actorId, options = {}, connectionId = null) 
   return { room: serializeRoom(room) };
 }
 
+export function setRoomAdmin(roomId, actorId, targetUserId, admin = true, connectionId = null) {
+  const room = rooms.get(roomId);
+  if (!room) return { error: '房间不存在' };
+  if (!isOwnerConnection(room, actorId, connectionId)) return { error: '仅房主可设置管理员' };
+  if (targetUserId === actorId) return { error: '不能修改自己的管理员状态' };
+  if (targetUserId === room.creatorId) return { error: '房主无需设为管理员' };
+
+  const target = room.users.get(targetUserId);
+  if (!target) return { error: '用户不在房间中' };
+  if (!isEligibleOwner(target)) return { error: '不能设置 TV 用户为管理员' };
+
+  const admins = ensureAdminIds(room);
+  if (admin) {
+    if (admins.has(targetUserId)) {
+      return { room: serializeRoom(room) };
+    }
+    if (admins.size >= MAX_ADMINS) return { error: '管理员最多 3 人' };
+    admins.add(targetUserId);
+  } else {
+    admins.delete(targetUserId);
+  }
+
+  if (room.ownerId === targetUserId) {
+    refreshRoomOwner(room);
+  }
+
+  persistRoom(room);
+  invalidateRoomsListCache();
+  return {
+    room: serializeRoom(room),
+    message: admin ? `已将「${target.nickname}」设为管理员` : `已取消「${target.nickname}」的管理员`,
+  };
+}
+
+export function setRoomFmMode(roomId, actorId, mode, connectionId = null) {
+  const room = rooms.get(roomId);
+  if (!room) return { error: '房间不存在' };
+  if (!isOwnerConnection(room, actorId, connectionId)) return { error: '仅房主可调整漫游模式' };
+
+  const nextMode = normalizeFmMode(mode);
+  if (room.neteaseFmMode === nextMode) {
+    return { room: serializeRoom(room) };
+  }
+
+  room.neteaseFmMode = nextMode;
+  clearNextRandom(room);
+  persistRoom(room);
+  invalidateRoomsListCache();
+
+  if (!room.current && room.queue.length === 0) {
+    void ensureNextRandom(room);
+  }
+
+  return { room: serializeRoom(room) };
+}
+
 export function setRoomAudioQuality(roomId, actorId, quality = {}, connectionId = null) {
   const room = rooms.get(roomId);
   if (!room) return { error: '房间不存在' };
@@ -615,7 +714,7 @@ export function setRoomAudioQuality(roomId, actorId, quality = {}, connectionId 
 
 function isUserChatMuted(room, userId) {
   if (!room || !userId) return false;
-  if (room.ownerId === userId) return false;
+  if (isRoomCreator(room, userId)) return false;
   if (room.muteAll) return true;
   return room.mutedUserIds?.has(userId) ?? false;
 }
@@ -695,6 +794,7 @@ export function kickUser(roomId, actorId, targetUserId, connectionId = null) {
   room.bannedUserIds.add(targetUserId);
 
   room.users.delete(targetUserId);
+  removeUserFromAdmins(room, targetUserId);
 
   if (room.users.size === 0) {
     if (room.isPlaying && room.current) {
@@ -734,23 +834,11 @@ export function kickUser(roomId, actorId, targetUserId, connectionId = null) {
 }
 
 export function transferOwner(roomId, actorId, targetUserId, connectionId = null) {
-  const room = rooms.get(roomId);
-  if (!room) return { error: '房间不存在' };
-  if (!isOwnerConnection(room, actorId, connectionId)) return { error: '仅房主可转让' };
-  if (targetUserId === actorId) return { error: '不能转让给自己' };
-
-  const target = room.users.get(targetUserId);
-  if (!target) return { error: '用户不在房间中' };
-  if (!isEligibleOwner(target)) return { error: '不能转让给 TV 只读用户' };
-
-  room.ownerId = targetUserId;
-  refreshOwnerConnection(room);
-  persistRoom(room);
-  invalidateRoomsListCache();
-  return {
-    room: serializeRoom(room),
-    message: `房主已转让给「${target.nickname}」`,
-  };
+  void roomId;
+  void actorId;
+  void targetUserId;
+  void connectionId;
+  return { error: '房主为房间初创者，不可转让' };
 }
 
 export function removeUser(roomId, userId, connectionId = null) {
@@ -776,6 +864,7 @@ export function removeUser(roomId, userId, connectionId = null) {
   }
 
   room.users.delete(userId);
+  removeUserFromAdmins(room, userId);
 
   if (room.users.size === 0) {
     // 刷新/断线时房间会短暂无人：保留 isPlaying，仅冻结进度，便于重新进入后继续播放
@@ -827,8 +916,17 @@ export function canUserMutate(roomId, userId) {
   return Boolean(room && user && !user.readOnly);
 }
 
+function isCreatorConnection(room, userId, connectionId = null) {
+  if (!isRoomCreator(room, userId)) return false;
+  return isEligibleOwner(room.users.get(userId));
+}
+
 function isOwnerConnection(room, userId, connectionId = null) {
-  return Boolean(room && room.ownerId === userId);
+  return isCreatorConnection(room, userId, connectionId);
+}
+
+function isControllerConnection(room, userId) {
+  return canControlPlayback(room, userId);
 }
 
 function songIdentity(source, id) {
@@ -921,9 +1019,9 @@ export function removeFromQueue(roomId, socketId, queueId) {
   if (!item) return { error: '歌曲不在队列中' };
 
   const user = room.users.get(socketId);
-  const isRoomOwner = room.ownerId === socketId;
+  const canManage = canControlPlayback(room, socketId);
   const isRequester = isQueueRequester(item, socketId, user);
-  if (!isRoomOwner && !isRequester) {
+  if (!canManage && !isRequester) {
     return { error: '只能删除自己点的歌' };
   }
 
@@ -974,8 +1072,7 @@ function clearNextRandom(room) {
 // }
 
 async function fetchRandomForRoom(room) {
-  void room;
-  return fetchRandomSong();
+  return fetchMetingFmSong(room.neteaseFmMode || DEFAULT_FM_MODE);
 }
 
 async function ensureNextRandom(room) {
@@ -1030,7 +1127,7 @@ function recordSongPlayHistory(room, song) {
       album: song.album,
       pic: song.pic,
       duration: song.duration,
-      requestedBy: song.requestedBy || '随机推荐',
+      requestedBy: song.requestedBy || '私人漫游',
       requestedById: song.requestedById || '',
       requestedAt: playedAt,
     }),
@@ -1089,7 +1186,7 @@ async function playNextUnlocked(room, options = {}) {
     setCurrentSong(room, {
       queueId: `random-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       ...random,
-      requestedBy: '随机推荐',
+      requestedBy: '私人漫游',
       addedAt: Date.now(),
     });
     return;
@@ -1170,7 +1267,7 @@ export function markRandomLoading(roomId) {
 export async function skipSong(roomId, socketId, connectionId = null) {
   const room = rooms.get(roomId);
   if (!room) return { error: '房间不存在' };
-  if (!isOwnerConnection(room, socketId, connectionId)) return { error: '仅房主可切歌' };
+  if (!isControllerConnection(room, socketId)) return { error: '仅房主或管理员可切歌' };
 
   await playNext(room, { allowFetchRandom: false });
   persistRoom(room);
@@ -1180,7 +1277,7 @@ export async function skipSong(roomId, socketId, connectionId = null) {
 export async function finishCurrentSong(roomId, socketId, connectionId, queueId) {
   const room = rooms.get(roomId);
   if (!room) return { error: '房间不存在' };
-  if (!isOwnerConnection(room, socketId, connectionId)) return { error: '仅房主可结束歌曲' };
+  if (!isControllerConnection(room, socketId)) return { error: '仅房主或管理员可结束歌曲' };
   if (!room.current) return { error: '当前没有正在播放的歌曲' };
   if (queueId && room.current.queueId !== queueId) return { room: serializeRoom(room) };
 
@@ -1229,7 +1326,7 @@ export async function advancePlaybackIfEnded(roomId, options = {}) {
 export function setPlaying(roomId, socketId, isPlaying, connectionId = null) {
   const room = rooms.get(roomId);
   if (!room || !room.current) return null;
-  if (!isOwnerConnection(room, socketId, connectionId)) return null;
+  if (!isControllerConnection(room, socketId)) return null;
 
   room.isPlaying = isPlaying;
   if (isPlaying) {
@@ -1250,7 +1347,7 @@ export function setPlaying(roomId, socketId, isPlaying, connectionId = null) {
 export function seekTo(roomId, socketId, time, connectionId = null) {
   const room = rooms.get(roomId);
   if (!room || !room.current) return null;
-  if (!isOwnerConnection(room, socketId, connectionId)) return null;
+  if (!isControllerConnection(room, socketId)) return null;
 
   const nextTime = Number(time);
   if (!Number.isFinite(nextTime) || nextTime < 0) return null;
@@ -1287,11 +1384,11 @@ export async function requestJump(roomId, socketId, queueId) {
 
   const item = room.queue.find((s) => s.queueId === queueId);
   if (!item) return { error: '歌曲不在队列中' };
-  const isOwner = isOwnerConnection(room, socketId);
+  const isController = isControllerConnection(room, socketId);
   const isRequester = isQueueRequester(item, socketId, user);
-  if (!isOwner && !isRequester) return { error: '只能为自己点的歌插队' };
+  if (!isController && !isRequester) return { error: '只能为自己点的歌插队' };
 
-  const jumped = await applyJumpToFront(room, queueId, { ownerPriority: isOwner });
+  const jumped = await applyJumpToFront(room, queueId, { ownerPriority: isController });
   if (!jumped) return { error: '歌曲不在队列中' };
 
   room.jumpRequests = room.jumpRequests.filter((r) => r.queueId !== queueId);
@@ -1302,7 +1399,7 @@ export async function requestJump(roomId, socketId, queueId) {
 export async function approveJump(roomId, socketId, requestId, connectionId = null) {
   const room = rooms.get(roomId);
   if (!room) return { error: '房间不存在' };
-  if (!isOwnerConnection(room, socketId, connectionId)) return { error: '仅房主可审批' };
+  if (!isControllerConnection(room, socketId)) return { error: '仅房主或管理员可审批' };
 
   const reqIdx = room.jumpRequests.findIndex((r) => r.id === requestId);
   if (reqIdx === -1) return { error: '申请不存在' };
@@ -1319,7 +1416,7 @@ export async function approveJump(roomId, socketId, requestId, connectionId = nu
 export function rejectJump(roomId, socketId, requestId, connectionId = null) {
   const room = rooms.get(roomId);
   if (!room) return { error: '房间不存在' };
-  if (!isOwnerConnection(room, socketId, connectionId)) return { error: '仅房主可审批' };
+  if (!isControllerConnection(room, socketId)) return { error: '仅房主或管理员可审批' };
 
   const before = room.jumpRequests.length;
   room.jumpRequests = room.jumpRequests.filter((r) => r.id !== requestId);
@@ -1333,7 +1430,7 @@ export function requestSkip(roomId, socketId) {
   const room = rooms.get(roomId);
   if (!room) return { error: '房间不存在' };
   if (!room.current) return { error: '当前没有正在播放的歌曲' };
-  if (room.ownerId === socketId) return { error: '房主可直接切歌' };
+  if (canControlPlayback(room, socketId)) return { error: '可直接切歌' };
 
   const user = room.users.get(socketId);
   if (room.skipRequests.some((r) => r.requestedBy === socketId)) {
@@ -1355,7 +1452,7 @@ export function requestSkip(roomId, socketId) {
 export async function approveSkip(roomId, socketId, requestId, connectionId = null) {
   const room = rooms.get(roomId);
   if (!room) return { error: '房间不存在' };
-  if (!isOwnerConnection(room, socketId, connectionId)) return { error: '仅房主可审批' };
+  if (!isControllerConnection(room, socketId)) return { error: '仅房主或管理员可审批' };
 
   const reqIdx = room.skipRequests.findIndex((r) => r.id === requestId);
   if (reqIdx === -1) return { error: '申请不存在' };
@@ -1370,7 +1467,7 @@ export async function approveSkip(roomId, socketId, requestId, connectionId = nu
 export function rejectSkip(roomId, socketId, requestId, connectionId = null) {
   const room = rooms.get(roomId);
   if (!room) return { error: '房间不存在' };
-  if (!isOwnerConnection(room, socketId, connectionId)) return { error: '仅房主可审批' };
+  if (!isControllerConnection(room, socketId)) return { error: '仅房主或管理员可审批' };
 
   const before = room.skipRequests.length;
   room.skipRequests = room.skipRequests.filter((r) => r.id !== requestId);
@@ -1672,7 +1769,7 @@ export function getSongHistory(roomId, options = {}) {
 export function reportTrackDuration(roomId, userId, queueId, durationMs, connectionId = null) {
   const room = rooms.get(roomId);
   if (!room?.current) return { error: '无当前歌曲' };
-  if (!isOwnerConnection(room, userId, connectionId)) return { error: '仅房主可上报时长' };
+  if (!isControllerConnection(room, userId)) return { error: '仅房主或管理员可上报时长' };
 
   const expectedQueueId = String(queueId || '');
   if (expectedQueueId && room.current.queueId !== expectedQueueId) {
@@ -1701,6 +1798,7 @@ function serializeRoom(room, options = {}) {
     chatMuted: forUserId ? isUserChatMuted(room, forUserId) : false,
     ownerId: room.ownerId,
     creatorId: room.creatorId ?? null,
+    adminIds: getOrderedAdminIds(room),
     ownerConnectionId: room.ownerConnectionId,
     queue: room.queue.map(serializeQueueItemForRoom).filter(Boolean),
     current: serializeQueueItemForRoom(room.current),
@@ -1713,6 +1811,7 @@ function serializeRoom(room, options = {}) {
     chatVisibleSince: forUser?.chatVisibleSince ?? null,
     randomLoading: Boolean(room.randomLoading),
     audioQuality: normalizeRoomAudioQuality(room.audioQuality),
+    neteaseFmMode: normalizeFmMode(room.neteaseFmMode),
   };
 }
 

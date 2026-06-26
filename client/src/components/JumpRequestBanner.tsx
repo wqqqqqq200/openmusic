@@ -4,10 +4,10 @@ import { useSocket } from '../hooks/useSocket';
 
 export default function JumpRequestBanner() {
   const room = useRoomStore((s) => s.room);
-  const isOwner = useRoomStore((s) => s.isOwner);
+  const canControlPlayback = useRoomStore((s) => s.canControlPlayback);
   const { approveSkip, rejectSkip } = useSocket();
 
-  if (!room || !isOwner) return null;
+  if (!room || !canControlPlayback) return null;
 
   const skipRequests = room.skipRequests ?? [];
   if (skipRequests.length === 0) return null;

@@ -102,8 +102,10 @@ export interface RoomState {
   /** 仅加入时由服务端按当前用户计算；广播更新请用 isChatMutedForUser */
   chatMuted?: boolean;
   ownerId: string | null;
-  /** 房间创建者（持久身份，重新进入时恢复房主） */
+  /** 房间初创房主（永久身份，唯一显示「房主」） */
   creatorId?: string | null;
+  /** 管理员（最多 3 人），可控制播放 */
+  adminIds?: string[];
   ownerConnectionId?: string | null;
   queue: QueueItem[];
   current: QueueItem | null;
@@ -120,10 +122,12 @@ export interface RoomState {
   chatHasMore?: boolean;
   /** @deprecated 不再随 room_update 广播，按需 load_song_history */
   songHistory?: SongHistoryItem[];
-  /** 服务端正在为空队列拉取随机歌曲 */
+  /** 服务端正在为空队列拉取私人漫游 */
   randomLoading?: boolean;
   /** 房间播放音质（网易 / QQ） */
   audioQuality?: RoomAudioQuality;
+  /** 队列为空时网易云私人漫游模式 */
+  neteaseFmMode?: string;
 }
 
 /** CRDT 播放状态（服务端唯一时间源） */

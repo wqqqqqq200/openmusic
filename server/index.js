@@ -22,6 +22,7 @@ import {
   renameRoom,
   setRoomLock,
   setRoomAudioQuality,
+  setRoomFmMode,
   setChatMute,
   addToQueue,
   removeFromQueue,
@@ -51,6 +52,7 @@ import {
   canUserMutate,
   kickUser,
   transferOwner,
+  setRoomAdmin,
   updateUserLocation,
   reportTrackDuration,
 } from './roomManager.js';
@@ -845,7 +847,10 @@ io.on('connection', (socket) => {
       connectionId: socket.id,
       clientId: userId,
       clientToken: nextClientToken,
-      isOwner: roomPayload.ownerId === userId,
+      isOwner: roomPayload.creatorId === userId,
+      isAdmin: (roomPayload.adminIds || []).includes(userId),
+      canControlPlayback: roomPayload.creatorId === userId || (roomPayload.adminIds || []).includes(userId),
+      isPlaybackLeader: roomPayload.ownerId === userId,
     });
 
     ensurePlayback(id).then((room) => {
@@ -907,6 +912,26 @@ io.on('connection', (socket) => {
     }
 
     const result = setRoomLock(roomId, getSocketUserId(socket), { locked, password }, socket.id);
+    if (result.error) {
+      callback?.({ success: false, error: result.error });
+      return;
+    }
+
+    io.to(roomId).emit('room_update', result.room);
+    callback?.({ success: true, room: result.room });
+  });
+
+  socket.on('set_room_fm_mode', ({ mode }, callback) => {
+    if (rejectReadOnly(socket, callback)) return;
+    if (rejectRateLimited(socket, limitSocketAction, 'set_room_fm_mode', callback)) return;
+
+    const roomId = socketToRoom.get(socket.id);
+    if (!roomId) {
+      callback?.({ success: false, error: '未加入房间' });
+      return;
+    }
+
+    const result = setRoomFmMode(roomId, getSocketUserId(socket), mode, socket.id);
     if (result.error) {
       callback?.({ success: false, error: result.error });
       return;
@@ -1005,6 +1030,27 @@ io.on('connection', (socket) => {
 
     const actorId = getSocketUserId(socket);
     const result = transferOwner(roomId, actorId, targetUserId, socket.id);
+    if (result.error) {
+      callback?.({ success: false, error: result.error });
+      return;
+    }
+
+    io.to(roomId).emit('room_update', result.room);
+    callback?.({ success: true, room: result.room, message: result.message });
+  });
+
+  socket.on('set_room_admin', ({ userId: targetUserId, admin }, callback) => {
+    if (rejectReadOnly(socket, callback)) return;
+    if (rejectRateLimited(socket, limitSocketAction, 'set_room_admin', callback)) return;
+
+    const roomId = socketToRoom.get(socket.id);
+    if (!roomId) {
+      callback?.({ success: false, error: '未加入房间' });
+      return;
+    }
+
+    const actorId = getSocketUserId(socket);
+    const result = setRoomAdmin(roomId, actorId, targetUserId, Boolean(admin), socket.id);
     if (result.error) {
       callback?.({ success: false, error: result.error });
       return;

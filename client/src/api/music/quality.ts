@@ -5,7 +5,7 @@ export type NeteaseQuality = 'standard' | 'exhigh' | 'lossless' | 'higher' | 'hi
 export type TencentQuality = 'standard' | 'exhigh' | 'lossless' | '128' | '320' | 'flac';
 
 export const DEFAULT_ROOM_AUDIO_QUALITY: RoomAudioQuality = {
-  netease: 'lossless',
+  netease: 'hires',
   tencent: 'lossless',
 };
 

@@ -9,11 +9,20 @@ interface Props {
   /** 侧边布局：左对齐，当前句居中 */
   variant?: 'center' | 'side';
   size?: 'default' | 'large';
+  /** 全屏歌词：展示全部行并允许手动滚动 */
+  scrollable?: boolean;
 }
 
 const SIDE_WINDOW = 5;
 
-export default function Lyrics({ lines, currentTime, onSeek, variant = 'center', size = 'default' }: Props) {
+export default function Lyrics({
+  lines,
+  currentTime,
+  onSeek,
+  variant = 'center',
+  size = 'default',
+  scrollable = false,
+}: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const activeRef = useRef<HTMLDivElement>(null);
   const [manualScroll, setManualScroll] = useState(false);
@@ -22,33 +31,40 @@ export default function Lyrics({ lines, currentTime, onSeek, variant = 'center',
   const displayLines = filterDisplayLyrics(lines);
   const isSide = variant === 'side';
   const isLarge = size === 'large';
+  const fullScroll = scrollable && isSide;
 
   const activeIndex = displayLines.findIndex((line, i) => {
     const next = displayLines[i + 1];
     return currentTime >= line.time && (!next || currentTime < next.time);
   });
 
-  const windowStart = isSide
-    ? Math.max(0, Math.min(
-        activeIndex >= 0 ? activeIndex - 1 : 0,
-        Math.max(0, displayLines.length - SIDE_WINDOW),
-      ))
-    : 0;
-  const windowEnd = isSide ? Math.min(displayLines.length, windowStart + SIDE_WINDOW) : displayLines.length;
-  const visibleLines = isSide ? displayLines.slice(windowStart, windowEnd) : displayLines;
+  const windowStart = fullScroll
+    ? 0
+    : isSide
+      ? Math.max(0, Math.min(
+          activeIndex >= 0 ? activeIndex - 1 : 0,
+          Math.max(0, displayLines.length - SIDE_WINDOW),
+        ))
+      : 0;
+  const windowEnd = fullScroll
+    ? displayLines.length
+    : isSide
+      ? Math.min(displayLines.length, windowStart + SIDE_WINDOW)
+      : displayLines.length;
+  const visibleLines = displayLines.slice(windowStart, windowEnd);
 
   useEffect(() => {
-    if (isSide || manualScroll || !activeRef.current || !containerRef.current) return;
+    if ((isSide && !fullScroll) || manualScroll || !activeRef.current || !containerRef.current) return;
 
     const container = containerRef.current;
     const active = activeRef.current;
     const offset = active.offsetTop - container.clientHeight / 2 + active.clientHeight / 2;
 
     container.scrollTo({ top: offset, behavior: 'smooth' });
-  }, [activeIndex, manualScroll, isSide]);
+  }, [activeIndex, manualScroll, isSide, fullScroll]);
 
   const handleScroll = () => {
-    if (isSide) return;
+    if (isSide && !fullScroll) return;
     setManualScroll(true);
     clearTimeout(scrollTimer.current);
     scrollTimer.current = setTimeout(() => setManualScroll(false), 5000);
@@ -67,17 +83,23 @@ export default function Lyrics({ lines, currentTime, onSeek, variant = 'center',
       ref={containerRef}
       onScroll={handleScroll}
       className={`flex-1 ${
-        isSide
-          ? 'flex flex-col justify-center overflow-hidden px-1'
-          : 'overflow-y-auto scrollbar-hide px-6 py-8'
+        fullScroll
+          ? 'overflow-y-auto overflow-x-hidden px-1 py-2 sm:py-4'
+          : isSide
+            ? 'flex flex-col justify-center overflow-hidden px-1'
+            : 'overflow-y-auto scrollbar-hide px-6 py-8'
       }`}
-      style={isSide
+      style={isSide && !fullScroll
         ? { maskImage: 'linear-gradient(transparent, black 8%, black 92%, transparent)' }
         : { maskImage: 'linear-gradient(transparent, black 12%, black 88%, transparent)' }}
     >
-      <div className={isSide ? (isLarge ? 'space-y-2 sm:space-y-3 py-1 sm:py-2 2xl:space-y-8 2xl:py-4' : 'space-y-3 py-2') : 'space-y-5 py-[40vh] 2xl:space-y-8'}>
+      <div className={fullScroll
+        ? (isLarge ? 'space-y-2 sm:space-y-3 py-2 2xl:space-y-6 2xl:py-4' : 'space-y-3 py-2')
+        : isSide
+          ? (isLarge ? 'space-y-2 sm:space-y-3 py-1 sm:py-2 2xl:space-y-8 2xl:py-4' : 'space-y-3 py-2')
+          : 'space-y-5 py-[40vh] 2xl:space-y-8'}>
         {visibleLines.map((line, i) => {
-          const realIndex = isSide ? windowStart + i : i;
+          const realIndex = windowStart + i;
           const isActive = realIndex === activeIndex;
           const isPast = activeIndex >= 0 && realIndex < activeIndex;
 

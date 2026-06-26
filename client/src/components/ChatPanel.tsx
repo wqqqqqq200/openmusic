@@ -84,7 +84,6 @@ export default function ChatPanel() {
   const [mentionIndex, setMentionIndex] = useState(0);
   const [qqFaces, setQQFaces] = useState<QFaceItem[]>(() => getInitialQQFaces());
   const [loadingFaces, setLoadingFaces] = useState(() => !hasFullQQFaces());
-  const bottomRef = useRef<HTMLDivElement>(null);
   const [chatScrollRoot, setChatScrollRoot] = useState<HTMLDivElement | null>(null);
   const [emojiGridRoot, setEmojiGridRoot] = useState<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLDivElement>(null);
@@ -174,7 +173,7 @@ export default function ChatPanel() {
       scrollBottomRafRef.current = requestAnimationFrame(() => {
         scrollBottomRafRef.current = null;
         if (reactionPickerOpenRef.current) return;
-        bottomRef.current?.scrollIntoView({ behavior, block: 'end' });
+        el.scrollTo({ top: el.scrollHeight, behavior });
       });
     };
     const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
@@ -391,6 +390,7 @@ export default function ChatPanel() {
     const mentions = buildMentions(messageText);
     const currentReplyTo = replyTo;
 
+    stickToBottomRef.current = true;
     clearEditor();
     setReplyTo(null);
     setSending(true);
@@ -665,13 +665,13 @@ export default function ChatPanel() {
         ) : messages.map((msg) => {
           const myUserId = mySocketId || getClientId();
           const isMe = msg.userId === myUserId;
-          const isOwner = msg.userId === room.ownerId;
+          const isRoomCreator = msg.userId === room.creatorId;
           const user = userMap.get(msg.userId);
           return (
             <div key={msg.id} className={`group flex flex-col ${isMe ? 'items-end' : 'items-start'}`} onContextMenu={(event) => { event.preventDefault(); handleReply(msg); }}>
               <div className={`mb-0.5 flex items-center gap-1.5 ${isMe ? 'flex-row-reverse' : ''}`}>
                 <button type="button" onClick={() => user && handleAt(user)} className={`text-[10px] ${isMe ? 'text-netease-red/80' : 'text-netease-muted'} hover:text-sky-300`}>
-                  {msg.nickname}{isOwner && <span className="ml-1 text-amber-400/80">房主</span>}
+                  {msg.nickname}{isRoomCreator && <span className="ml-1 text-amber-400/80">房主</span>}
                 </button>
                 {msg.timestamp > 0 && (
                   <time
@@ -726,7 +726,6 @@ export default function ChatPanel() {
             </div>
           );
         })}
-        <div ref={bottomRef} />
       </div>
 
       <div ref={chatOverlayHostRef} className="pointer-events-none absolute inset-0 z-30" />
@@ -789,7 +788,7 @@ export default function ChatPanel() {
                     className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm transition-colors ${index === mentionIndex ? 'bg-white/10 text-white' : 'text-white/85 hover:bg-white/10'}`}
                   >
                     <span className="min-w-0 truncate">{user.nickname}</span>
-                    {user.id === room.ownerId && <span className="ml-2 flex-shrink-0 text-[10px] text-amber-400/80">房主</span>}
+                    {user.id === room.creatorId && <span className="ml-2 flex-shrink-0 text-[10px] text-amber-400/80">房主</span>}
                   </button>
                 ))}
               </div>

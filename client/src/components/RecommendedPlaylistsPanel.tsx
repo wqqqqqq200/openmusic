@@ -114,7 +114,7 @@ function PlaylistCover({
   return (
     <div
       className={`relative overflow-hidden bg-netease-card ${
-        compact ? 'h-12 w-12 flex-shrink-0 rounded-md' : 'aspect-square w-full rounded-lg'
+        compact ? 'aspect-square w-full flex-shrink-0 rounded-md' : 'aspect-square w-full rounded-lg'
       }`}
     >
       <PlatformGlassTag platform={playlist.platform} compact={compact} />
@@ -150,7 +150,20 @@ function PlaylistSkeleton({
 }: {
   compact?: boolean;
 }) {
-  const cardClass = compact ? 'h-12 w-12 rounded-md' : 'aspect-square w-full rounded-lg';
+  const cardClass = compact ? 'aspect-square w-full rounded-md' : 'aspect-square w-full rounded-lg';
+
+  if (compact) {
+    return (
+      <div className="flex min-w-min gap-2.5 pb-1">
+        {Array.from({ length: 8 }, (_, i) => (
+          <div key={i} className="flex w-20 flex-shrink-0 flex-col items-center">
+            <div className={`${cardClass} skeleton-shimmer`} />
+            <div className="mt-1 h-2 w-full rounded skeleton-shimmer" />
+          </div>
+        ))}
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-3">
@@ -158,7 +171,7 @@ function PlaylistSkeleton({
         {Array.from({ length: CURATED_COUNT }, (_, i) => (
           <div key={`curated-${i}`} className="flex flex-col items-center">
             <div className={`${cardClass} skeleton-shimmer`} />
-            <div className={`mt-1 space-y-1 ${compact ? 'w-12' : 'w-full'}`}>
+            <div className="mt-1 w-full space-y-1">
               <div className="h-2 w-full rounded skeleton-shimmer" />
             </div>
           </div>
@@ -170,7 +183,7 @@ function PlaylistSkeleton({
             {Array.from({ length: 2 }, (_, col) => (
               <div key={col} className="flex h-full flex-col items-center">
                 <div className={`${cardClass} skeleton-shimmer`} />
-                <div className={`mt-1 space-y-1 ${compact ? 'w-12' : 'w-full'}`}>
+                <div className="mt-1 w-full space-y-1">
                   <div className="h-2 w-full rounded skeleton-shimmer" />
                 </div>
               </div>
@@ -200,10 +213,10 @@ function PlaylistCard({
       type="button"
       disabled={disabled}
       onClick={onSelect}
-      className={`group flex h-full w-full flex-col transition-colors disabled:opacity-60 ${
+      className={`group flex flex-col transition-colors disabled:opacity-60 ${
         compact
-          ? 'items-center text-center'
-          : 'items-center rounded-lg p-0.5 text-center hover:bg-netease-card/60'
+          ? 'w-20 flex-shrink-0 items-center text-center'
+          : 'h-full w-full items-center rounded-lg p-0.5 text-center hover:bg-netease-card/60'
       }`}
     >
       <PlaylistCover playlist={playlist} isLoading={isLoading} compact={compact} />
@@ -272,6 +285,31 @@ export default function RecommendedPlaylistsPanel({ onSelectPlaylist, compact = 
     }
   };
 
+  const renderPlaylistHorizontalScroll = () => {
+    const curated = neteasePlaylists.slice(0, CURATED_COUNT);
+    const neteaseExtras = neteasePlaylists.slice(CURATED_COUNT);
+    const items: PlaylistSearchItem[] = [...curated];
+    for (let i = 0; i < NETEASE_EXTRA_LIMIT; i += 1) {
+      if (neteaseExtras[i]) items.push(neteaseExtras[i]);
+      if (qqPlaylists[i]) items.push(qqPlaylists[i]);
+    }
+
+    return (
+      <div className="flex min-w-min gap-2.5 pb-1">
+        {items.map((playlist) => (
+          <PlaylistCard
+            key={playlistKey(playlist)}
+            playlist={playlist}
+            isLoading={loadingKey === playlistKey(playlist)}
+            disabled={Boolean(loadingKey)}
+            compact
+            onSelect={() => void handleSelect(playlist)}
+          />
+        ))}
+      </div>
+    );
+  };
+
   const renderPlaylistGrid = () => {
     const curated = neteasePlaylists.slice(0, CURATED_COUNT);
     const neteaseExtras = neteasePlaylists.slice(CURATED_COUNT);
@@ -282,7 +320,7 @@ export default function RecommendedPlaylistsPanel({ onSelectPlaylist, compact = 
         playlist={playlist}
         isLoading={loadingKey === playlistKey(playlist)}
         disabled={Boolean(loadingKey)}
-        compact={compact}
+        compact={false}
         onSelect={() => void handleSelect(playlist)}
       />
     );
@@ -323,8 +361,8 @@ export default function RecommendedPlaylistsPanel({ onSelectPlaylist, compact = 
           <Sparkles className="h-3.5 w-3.5 text-sky-400" />
           <h2 className="text-xs font-medium">为你推荐</h2>
         </div>
-        <div className="max-h-72 overflow-y-auto p-2">
-          {loading ? <PlaylistSkeleton compact /> : renderPlaylistGrid()}
+        <div className="overflow-x-auto p-2">
+          {loading ? <PlaylistSkeleton compact /> : renderPlaylistHorizontalScroll()}
         </div>
       </div>
     );

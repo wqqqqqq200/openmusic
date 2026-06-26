@@ -97,6 +97,7 @@ function joinPayload(session: JoinSession) {
 function applyRoomSnapshot(room: RoomState, force = false) {
   const current = useRoomStore.getState().room;
   useRoomStore.getState().setRoom(force ? room : mergeRoomState(room, current));
+  useRoomStore.getState().syncRolesFromRoom(room);
 }
 
 function applyJoinSnapshot(room: RoomState, playbackState?: PlaybackState) {
@@ -159,6 +160,9 @@ function rejoinLastRoom() {
         clientId?: string;
         clientToken?: string;
         isOwner?: boolean;
+        isAdmin?: boolean;
+        canControlPlayback?: boolean;
+        isPlaybackLeader?: boolean;
       } | undefined,
     ) => {
       rejoinInFlight = false;
@@ -169,7 +173,13 @@ function rejoinLastRoom() {
       applyJoinExtras(res.room, { messages: res.messages, chatHasMore: res.chatHasMore });
       rememberClientIdentity(res.clientId || res.socketId, res.clientToken);
       if (res.socketId) {
-        useRoomStore.getState().setConnectionInfo(res.socketId, Boolean(res.isOwner), res.connectionId || null);
+        useRoomStore.getState().setConnectionInfo(
+          res.socketId,
+          Boolean(res.isOwner),
+          res.connectionId || null,
+          Boolean(res.isAdmin),
+          Boolean(res.isPlaybackLeader),
+        );
       }
       if (res.room.current) {
         prefetchCurrentSong(res.room.current);
@@ -213,13 +223,12 @@ if (socketListenersAttached) return;
         users: room.users.length,
         randomLoading: room.randomLoading,
       });
-      const { mySocketId, myConnectionId } = useRoomStore.getState();
-      const isOwner = Boolean(mySocketId && room.ownerId === mySocketId);
+      const { mySocketId } = useRoomStore.getState();
 
       applyRoomSnapshot(room);
 
       if (mySocketId) {
-        useRoomStore.getState().setConnectionInfo(mySocketId, isOwner, myConnectionId);
+        useRoomStore.getState().syncRolesFromRoom(room);
       }
     };
 
@@ -345,6 +354,8 @@ if (!connected.current && !socketConnectRequested) {
         clientId?: string;
         clientToken?: string;
         isOwner?: boolean;
+        isAdmin?: boolean;
+        isPlaybackLeader?: boolean;
       }>('join_room', joinPayload(session), { success: false, error: '连接超时，请检查网络' })
         .then((res) => {
           if (res.success && res.room) {
@@ -356,7 +367,13 @@ if (!connected.current && !socketConnectRequested) {
             rememberClientIdentity(res.clientId || res.socketId, res.clientToken);
 
             if (res.socketId) {
-              setConnectionInfo(res.socketId, Boolean(res.isOwner), res.connectionId || null);
+              setConnectionInfo(
+                res.socketId,
+                Boolean(res.isOwner),
+                res.connectionId || null,
+                Boolean(res.isAdmin),
+                Boolean(res.isPlaybackLeader),
+              );
             }
             if (res.room.current) {
               prefetchCurrentSong(res.room.current);
@@ -552,13 +569,23 @@ if (s.connected) {
     ).then((res) => {
       if (res.success && res.room) {
         applyRoomSnapshot(res.room);
-        const { mySocketId, myConnectionId } = useRoomStore.getState();
-        const nextIsOwner = Boolean(mySocketId && res.room!.ownerId === mySocketId);
-        setConnectionInfo(mySocketId, nextIsOwner, myConnectionId);
       }
       return res;
     });
-  }, [setConnectionInfo]);
+  }, []);
+
+  const setRoomAdmin = useCallback((userId: string, admin: boolean): Promise<{ success: boolean; error?: string; message?: string }> => {
+    return emitWithAck<{ success: boolean; error?: string; message?: string; room?: RoomState }>(
+      'set_room_admin',
+      { userId, admin },
+      { success: false, error: '连接超时，请重试' },
+    ).then((res) => {
+      if (res.success && res.room) {
+        applyRoomSnapshot(res.room);
+      }
+      return res;
+    });
+  }, []);
 
   const kickUser = useCallback((userId: string): Promise<{ success: boolean; error?: string; message?: string }> => {
     return emitWithAck<{ success: boolean; error?: string; message?: string; room?: RoomState }>(
@@ -590,6 +617,19 @@ if (s.connected) {
     return emitWithAck<{ success: boolean; error?: string; room?: RoomState }>(
       'set_room_lock',
       { locked, password },
+      { success: false, error: '连接超时，请重试' },
+    ).then((res) => {
+      if (res.success && res.room) {
+        applyRoomSnapshot(res.room);
+      }
+      return res;
+    });
+  }, []);
+
+  const setRoomFmMode = useCallback((mode: string): Promise<{ success: boolean; error?: string; room?: RoomState }> => {
+    return emitWithAck<{ success: boolean; error?: string; room?: RoomState }>(
+      'set_room_fm_mode',
+      { mode },
       { success: false, error: '连接超时，请重试' },
     ).then((res) => {
       if (res.success && res.room) {
@@ -714,9 +754,13 @@ if (s.connected) {
 
     transferOwner,
 
+    setRoomAdmin,
+
     renameRoomName,
 
     setRoomLock,
+
+    setRoomFmMode,
 
     setRoomAudioQuality,
 

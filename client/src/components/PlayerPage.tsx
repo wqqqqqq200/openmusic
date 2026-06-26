@@ -35,7 +35,7 @@ export default function PlayerPage({ onClose }: Props) {
 
   const room = useRoomStore((s) => s.room);
 
-  const isOwner = useRoomStore((s) => s.isOwner);
+  const canControlPlayback = useRoomStore((s) => s.canControlPlayback);
   const trackLoading = useAudioStore((s) => s.trackLoading);
   const setTrackLoading = useAudioStore((s) => s.setTrackLoading);
   const seekPlayback = useAudioStore((s) => s.seekPlayback);
@@ -190,11 +190,13 @@ export default function PlayerPage({ onClose }: Props) {
 
             currentTime={displayTime}
 
-            onSeek={isOwner ? handleSeek : undefined}
+            onSeek={canControlPlayback ? handleSeek : undefined}
 
             variant="side"
 
             size="large"
+
+            scrollable
 
           />
 
@@ -226,7 +228,7 @@ export default function PlayerPage({ onClose }: Props) {
 
             onSeek={handleSeek}
 
-            disabled={!isOwner}
+            disabled={!canControlPlayback}
 
             className="h-1.5 2xl:h-2.5"
 
@@ -258,10 +260,10 @@ export default function PlayerPage({ onClose }: Props) {
           />
 
           <button
-            onClick={isOwner ? handlePlayPause : undefined}
-            disabled={trackLoading || !isOwner}
-            className={`w-14 h-14 sm:w-16 sm:h-16 2xl:w-24 2xl:h-24 flex items-center justify-center rounded-full transition-all shadow-lg shadow-black/30 disabled:opacity-80 ${isOwner ? 'bg-white text-black hover:scale-105' : 'bg-white/10 text-white/70 cursor-not-allowed'}`}
-            title={isOwner ? '暂停/播放' : (isPlaying ? '房主正在播放' : '房主已暂停')}
+            onClick={canControlPlayback ? handlePlayPause : undefined}
+            disabled={trackLoading || !canControlPlayback}
+            className={`w-14 h-14 sm:w-16 sm:h-16 2xl:w-24 2xl:h-24 flex items-center justify-center rounded-full transition-all shadow-lg shadow-black/30 disabled:opacity-80 ${canControlPlayback ? 'bg-white text-black hover:scale-105' : 'bg-white/10 text-white/70 cursor-not-allowed'}`}
+            title={canControlPlayback ? '暂停/播放' : (isPlaying ? '正在播放' : '已暂停')}
           >
             {trackLoading ? (
               <Loader2 className="w-6 h-6 sm:w-7 sm:h-7 2xl:w-10 2xl:h-10 animate-spin" />
@@ -272,7 +274,7 @@ export default function PlayerPage({ onClose }: Props) {
             )}
           </button>
 
-          {isOwner ? (
+          {canControlPlayback ? (
             <button
               onClick={handleSkip}
               disabled={trackLoading}

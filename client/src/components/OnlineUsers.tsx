@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, Crown, MapPin, Pencil, UserMinus, Users, X } from 'lucide-react';
+import { Check, Crown, MapPin, Pencil, Shield, UserMinus, Users, X } from 'lucide-react';
 import { useRoomStore } from '../stores/roomStore';
 import { useSocket } from '../hooks/useSocket';
 import ConfirmModal from './ConfirmModal';
@@ -7,28 +7,28 @@ import type { RoomUser } from '../types';
 
 interface Props {
   users: RoomUser[];
-  ownerId?: string | null;
   creatorId?: string | null;
   onNotice?: (message: string, type: 'success' | 'error') => void;
 }
 
 type PendingAction =
   | { type: 'kick'; user: RoomUser }
-  | { type: 'transfer'; user: RoomUser };
+  | { type: 'admin'; user: RoomUser; admin: boolean };
 
-export default function OnlineUsers({ users, ownerId, creatorId, onNotice }: Props) {
+export default function OnlineUsers({ users, creatorId, onNotice }: Props) {
+  const room = useRoomStore((s) => s.room);
   const mySocketId = useRoomStore((s) => s.mySocketId);
   const isOwner = useRoomStore((s) => s.isOwner);
+  const adminIds = room?.adminIds || [];
   const nickname = useRoomStore((s) => s.nickname);
   const setNickname = useRoomStore((s) => s.setNickname);
-  const { renameUser, kickUser, transferOwner } = useSocket();
+  const { renameUser, kickUser, setRoomAdmin } = useSocket();
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
-  const [transferPickOpen, setTransferPickOpen] = useState(false);
   const [draftName, setDraftName] = useState(nickname);
   const [saving, setSaving] = useState(false);
   const [kickingId, setKickingId] = useState<string | null>(null);
-  const [transferringId, setTransferringId] = useState<string | null>(null);
+  const [adminTogglingId, setAdminTogglingId] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
   const [error, setError] = useState('');
   const panelRef = useRef<HTMLDivElement>(null);
@@ -41,16 +41,9 @@ export default function OnlineUsers({ users, ownerId, creatorId, onNotice }: Pro
         if (a.id === creatorId) return -1;
         if (b.id === creatorId) return 1;
       }
-      if (a.id === ownerId) return -1;
-      if (b.id === ownerId) return 1;
       return a.joinedAt - b.joinedAt;
     });
-  }, [users, mySocketId, ownerId, creatorId]);
-
-  const transferCandidates = useMemo(
-    () => orderedUsers.filter((user) => user.id !== mySocketId && !user.readOnly),
-    [orderedUsers, mySocketId],
-  );
+  }, [users, mySocketId, creatorId]);
 
   useEffect(() => {
     if (!open) return;
@@ -60,7 +53,6 @@ export default function OnlineUsers({ users, ownerId, creatorId, onNotice }: Pro
       if (panelRef.current?.contains(target)) return;
       setOpen(false);
       setEditing(false);
-      setTransferPickOpen(false);
       setError('');
     };
 
@@ -93,9 +85,10 @@ export default function OnlineUsers({ users, ownerId, creatorId, onNotice }: Pro
     setPendingAction({ type: 'kick', user });
   };
 
-  const handleTransfer = (user: RoomUser) => {
-    if (!isOwner || transferringId) return;
-    setPendingAction({ type: 'transfer', user });
+  const handleToggleAdmin = (user: RoomUser) => {
+    if (!isOwner || adminTogglingId) return;
+    const nextAdmin = !adminIds.includes(user.id);
+    setPendingAction({ type: 'admin', user, admin: nextAdmin });
   };
 
   const executePendingAction = async () => {
@@ -119,26 +112,32 @@ export default function OnlineUsers({ users, ownerId, creatorId, onNotice }: Pro
     }
 
     const user = pendingAction.user;
-    setTransferringId(user.id);
+    setAdminTogglingId(user.id);
     setError('');
-    const res = await transferOwner(user.id);
+    const res = await setRoomAdmin(user.id, pendingAction.admin);
     setPendingAction(null);
     if (res.success) {
-      setTransferPickOpen(false);
-      onNotice?.(res.message || `房主已转让给「${user.nickname}」`, 'success');
+      onNotice?.(res.message || (pendingAction.admin ? `已将「${user.nickname}」设为管理员` : `已取消「${user.nickname}」的管理员`), 'success');
     } else {
-      const msg = res.error || '转让失败';
+      const msg = res.error || '设置管理员失败';
       setError(msg);
       onNotice?.(msg, 'error');
     }
-    setTransferringId(null);
+    setAdminTogglingId(null);
   };
 
   const canKick = (user: RoomUser) => (
     isOwner
     && user.id !== mySocketId
     && user.id !== creatorId
-    && user.id !== ownerId
+    && !adminIds.includes(user.id)
+  );
+
+  const canToggleAdmin = (user: RoomUser) => (
+    isOwner
+    && user.id !== mySocketId
+    && user.id !== creatorId
+    && !user.readOnly
   );
 
   return (
@@ -154,9 +153,9 @@ export default function OnlineUsers({ users, ownerId, creatorId, onNotice }: Pro
           {orderedUsers.slice(0, 5).map((user) => (
             <div
               key={user.id}
-              title={user.id === ownerId ? `${user.nickname}（房主）` : user.nickname}
+              title={user.id === creatorId ? `${user.nickname}（房主）` : user.nickname}
               className={`relative w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold text-white border-2 border-netease-dark ${
-                user.id === ownerId
+                user.id === creatorId
                   ? 'bg-gradient-to-br from-amber-500 to-orange-600'
                   : user.id === mySocketId
                     ? 'bg-gradient-to-br from-netease-red to-pink-500'
@@ -164,7 +163,7 @@ export default function OnlineUsers({ users, ownerId, creatorId, onNotice }: Pro
               }`}
             >
               {user.nickname.charAt(0).toUpperCase()}
-              {user.id === ownerId && (
+              {user.id === creatorId && (
                 <Crown className="absolute -top-1 -right-1 w-3 h-3 text-amber-300" />
               )}
             </div>
@@ -190,7 +189,6 @@ export default function OnlineUsers({ users, ownerId, creatorId, onNotice }: Pro
               onClick={() => {
                 setOpen(false);
                 setEditing(false);
-                setTransferPickOpen(false);
               }}
               className="rounded-lg p-1 text-netease-muted hover:bg-white/10 hover:text-white"
               aria-label="关闭用户列表"
@@ -202,8 +200,8 @@ export default function OnlineUsers({ users, ownerId, creatorId, onNotice }: Pro
           <div className="max-h-80 space-y-1.5 overflow-y-auto pr-0.5">
             {orderedUsers.map((user) => {
               const isMe = user.id === mySocketId;
-              const isRoomOwner = user.id === ownerId;
-              const isCreator = Boolean(creatorId && user.id === creatorId);
+              const isRoomCreator = Boolean(creatorId && user.id === creatorId);
+              const isAdmin = adminIds.includes(user.id);
 
               return (
                 <div
@@ -217,7 +215,7 @@ export default function OnlineUsers({ users, ownerId, creatorId, onNotice }: Pro
                   <div className="flex items-center gap-2">
                     <div
                       className={`relative w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white flex-shrink-0 ${
-                        isRoomOwner
+                        isRoomCreator
                           ? 'bg-gradient-to-br from-amber-500 to-orange-600'
                           : isMe
                             ? 'bg-gradient-to-br from-netease-red to-pink-500'
@@ -225,7 +223,7 @@ export default function OnlineUsers({ users, ownerId, creatorId, onNotice }: Pro
                       }`}
                     >
                       {user.nickname.charAt(0).toUpperCase()}
-                      {isRoomOwner && <Crown className="absolute -top-1 -right-1 w-3 h-3 text-amber-300" />}
+                      {isRoomCreator && <Crown className="absolute -top-1 -right-1 w-3 h-3 text-amber-300" />}
                     </div>
 
                     <div className="min-w-0 flex-1">
@@ -238,14 +236,14 @@ export default function OnlineUsers({ users, ownerId, creatorId, onNotice }: Pro
                             我
                           </span>
                         )}
-                        {isRoomOwner && (
+                        {isRoomCreator && (
                           <span className="flex-shrink-0 whitespace-nowrap rounded-full bg-amber-400/15 px-1.5 py-0 text-[9px] leading-4 text-amber-300">
                             房主
                           </span>
                         )}
-                        {isCreator && !isRoomOwner && (
-                          <span className="flex-shrink-0 whitespace-nowrap rounded-full bg-white/8 px-1.5 py-0 text-[9px] leading-4 text-netease-muted">
-                            创建者
+                        {isAdmin && !isRoomCreator && (
+                          <span className="flex-shrink-0 whitespace-nowrap rounded-full bg-sky-400/15 px-1.5 py-0 text-[9px] leading-4 text-sky-300">
+                            管理员
                           </span>
                         )}
                         {user.readOnly && (
@@ -258,41 +256,38 @@ export default function OnlineUsers({ users, ownerId, creatorId, onNotice }: Pro
                         <MapPin className="h-3 w-3 flex-shrink-0" />
                         <span className="truncate">{user.location || '未知'}</span>
                       </div>
-
                     </div>
+
                     <div className="flex flex-shrink-0 items-center">
                       {isMe && !editing && (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setDraftName(user.nickname);
-                              setEditing(true);
-                              setTransferPickOpen(false);
-                            }}
-                            className="rounded-lg p-1.5 text-netease-muted hover:bg-white/10 hover:text-white"
-                            aria-label="修改昵称"
-                          >
-                            <Pencil className="w-3.5 h-3.5" />
-                          </button>
-                          {isOwner && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setTransferPickOpen((value) => !value);
-                                setEditing(false);
-                              }}
-                              className={`rounded-lg p-1.5 transition-colors ${
-                                transferPickOpen
-                                  ? 'bg-amber-400/15 text-amber-300'
-                                  : 'text-netease-muted hover:bg-amber-400/10 hover:text-amber-300'
-                              }`}
-                              aria-label="转让房主"
-                            >
-                              <Crown className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-                        </>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDraftName(user.nickname);
+                            setEditing(true);
+                          }}
+                          className="rounded-lg p-1.5 text-netease-muted hover:bg-white/10 hover:text-white"
+                          aria-label="修改昵称"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+
+                      {canToggleAdmin(user) && (
+                        <button
+                          type="button"
+                          onClick={() => handleToggleAdmin(user)}
+                          disabled={adminTogglingId === user.id}
+                          className={`rounded-lg p-1.5 transition-colors disabled:opacity-40 ${
+                            isAdmin
+                              ? 'bg-sky-400/15 text-sky-300'
+                              : 'text-netease-muted hover:bg-sky-400/10 hover:text-sky-300'
+                          }`}
+                          aria-label={isAdmin ? '取消管理员' : '设为管理员'}
+                          title={isAdmin ? '取消管理员' : '设为管理员'}
+                        >
+                          <Shield className="w-3.5 h-3.5" />
+                        </button>
                       )}
 
                       {canKick(user) && (
@@ -334,22 +329,6 @@ export default function OnlineUsers({ users, ownerId, creatorId, onNotice }: Pro
                       </button>
                     </div>
                   )}
-
-                  {isMe && isOwner && transferPickOpen && transferCandidates.length > 0 && (
-                    <div className="mt-2 space-y-1">
-                      {transferCandidates.map((candidate) => (
-                        <button
-                          key={candidate.id}
-                          type="button"
-                          onClick={() => handleTransfer(candidate)}
-                          disabled={transferringId === candidate.id}
-                          className="w-full rounded-lg border border-white/5 bg-white/[0.03] px-2.5 py-1.5 text-left text-xs text-white hover:bg-amber-400/10 hover:border-amber-400/20 disabled:opacity-40"
-                        >
-                          {candidate.nickname}
-                        </button>
-                      ))}
-                    </div>
-                  )}
                 </div>
               );
             })}
@@ -377,13 +356,17 @@ export default function OnlineUsers({ users, ownerId, creatorId, onNotice }: Pro
         />
       )}
 
-      {pendingAction?.type === 'transfer' && (
+      {pendingAction?.type === 'admin' && (
         <ConfirmModal
-          title="转让房主"
-          message={`确定将房主转让给「${pendingAction.user.nickname}」吗？`}
-          confirmLabel="转让"
+          title={pendingAction.admin ? '设为管理员' : '取消管理员'}
+          message={
+            pendingAction.admin
+              ? `确定将「${pendingAction.user.nickname}」设为管理员吗？管理员可控制播放、切歌与审批。`
+              : `确定取消「${pendingAction.user.nickname}」的管理员权限吗？`
+          }
+          confirmLabel={pendingAction.admin ? '设为管理员' : '取消管理员'}
           confirmVariant="primary"
-          loading={transferringId === pendingAction.user.id}
+          loading={adminTogglingId === pendingAction.user.id}
           onConfirm={() => void executePendingAction()}
           onCancel={() => setPendingAction(null)}
         />

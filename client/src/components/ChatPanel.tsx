@@ -403,6 +403,31 @@ export default function ChatPanel() {
     syncEditorState();
   };
 
+  const setEditorPlainText = (value: string) => {
+    const editor = inputRef.current;
+    if (!editor) {
+      setText(value);
+      return;
+    }
+    editor.textContent = value;
+    syncEditorState();
+    requestAnimationFrame(() => {
+      editor.focus();
+      const selection = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(editor);
+      range.collapse(false);
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+    });
+  };
+
+  const applyReplyMention = (targetNickname: string) => {
+    const body = serializeEditor().replace(/^@[^\s@]{1,24}\s+/, '');
+    const prefix = `@${targetNickname} `;
+    setEditorPlainText(`${prefix}${body}`.slice(0, MAX_CHAT_LENGTH));
+  };
+
   const clearEditor = () => {
     if (inputRef.current) inputRef.current.textContent = '';
     setText('');
@@ -451,6 +476,11 @@ export default function ChatPanel() {
 
   const handleReply = (msg: ChatMessage) => {
     setReplyTo({ id: msg.id, userId: msg.userId, nickname: msg.nickname, text: compactReplyText(msg.text) });
+    const isSelf = msg.userId === mySocketId || msg.nickname === nickname;
+    if (!isSelf) {
+      applyReplyMention(msg.nickname);
+      return;
+    }
     requestAnimationFrame(() => inputRef.current?.focus());
   };
 
@@ -822,7 +852,21 @@ export default function ChatPanel() {
               <span className="flex-shrink-0">回复 {replyTo.nickname}：</span>
               <span className="min-w-0 truncate">{renderMessageText(replyTo.text, 'reply')}</span>
             </span>
-            <button type="button" onClick={() => setReplyTo(null)} className="ml-2 rounded p-0.5 hover:bg-white/10"><X className="h-3 w-3" /></button>
+            <button
+              type="button"
+              onClick={() => {
+                if (replyTo) {
+                  const current = serializeEditor();
+                  const escaped = replyTo.nickname.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                  const stripped = current.replace(new RegExp(`^@${escaped}\\s+`), '');
+                  if (stripped !== current) setEditorPlainText(stripped);
+                }
+                setReplyTo(null);
+              }}
+              className="ml-2 rounded p-0.5 hover:bg-white/10"
+            >
+              <X className="h-3 w-3" />
+            </button>
           </div>
         )}
         {error && <p className="mb-1 text-xs text-netease-red">{error}</p>}

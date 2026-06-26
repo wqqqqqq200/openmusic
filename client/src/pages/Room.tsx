@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 
-import { Search, Loader2, Copy, Check, Crown, Tv, LogOut, X, Heart, Plus, Download, ListMusic, Upload, History, ListPlus, Pencil, Lock, LockOpen, Radio, ChevronLeft, ChevronRight, Megaphone, Music2, Ban } from 'lucide-react';
+import { Search, Loader2, Copy, Check, Crown, Tv, LogOut, X, Heart, Plus, Download, ListMusic, Upload, History, ListPlus, Pencil, Lock, LockOpen, Radio, ChevronLeft, ChevronRight, Megaphone, Music2, Ban, Image } from 'lucide-react';
 
 import { searchAllSongs, getAvailableSources, type SearchFilterMode } from '../api/music';
 import { importPlaylist, searchPlaylists, type PlaylistSearchItem, type PlaylistPlatform } from '../api/music/playlist';
@@ -62,6 +62,7 @@ import Tooltip from '../components/Tooltip';
 import { copyToClipboard } from '../lib/copyToClipboard';
 import { rememberRoomVisit } from '../lib/recentRooms';
 import { buildRoomShareText } from '../lib/roomShare';
+import { readRoomCoverBgEnabled, writeRoomCoverBgEnabled } from '../lib/roomCoverBg';
 
 
 function roomPasswordKey(roomId: string) {
@@ -199,6 +200,7 @@ export default function Room() {
   const [playlistSearchTotal, setPlaylistSearchTotal] = useState(0);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [hotRefreshKey, setHotRefreshKey] = useState(0);
+  const [coverBgEnabled, setCoverBgEnabled] = useState(readRoomCoverBgEnabled);
   const isLgUp = useMediaQuery('(min-width: 1024px)');
   const [favoritesOpen, setFavoritesOpen] = useState(false);
   const [songHistoryOpen, setSongHistoryOpen] = useState(false);
@@ -734,6 +736,14 @@ export default function Room() {
     }
   };
 
+  const toggleCoverBg = () => {
+    setCoverBgEnabled((prev) => {
+      const next = !prev;
+      writeRoomCoverBgEnabled(next);
+      return next;
+    });
+  };
+
   const handleCopyTvLink = async () => {
     const url = `${window.location.origin}/tv/${room?.id}`;
     const ok = await copyToClipboard(url);
@@ -978,7 +988,7 @@ export default function Room() {
 
     <div className="relative isolate flex h-full flex-col overflow-hidden">
 
-      <RoomAmbientBackground song={room.current} />
+      {coverBgEnabled && <RoomAmbientBackground song={room.current} />}
 
       <AudioEngine />
 
@@ -1013,7 +1023,11 @@ export default function Room() {
         onClose={handleCloseAnnouncementPopup}
       />
 
-      <header className="relative z-30 flex-shrink-0 border-b border-white/10 bg-black/20 px-3 py-2.5 backdrop-blur-xl sm:px-4 sm:py-3 safe-top [-webkit-backdrop-filter:blur(24px)]">
+      <header className={`relative z-30 flex-shrink-0 border-b px-3 py-2.5 sm:px-4 sm:py-3 safe-top ${
+        coverBgEnabled
+          ? 'border-white/10 bg-black/20 backdrop-blur-xl [-webkit-backdrop-filter:blur(24px)]'
+          : 'glass border-netease-border/50'
+      }`}>
 
         <div className="max-w-[1680px] mx-auto flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
 
@@ -1168,6 +1182,23 @@ export default function Room() {
 
             <div className="flex items-center gap-1 sm:gap-2">
 
+              <Tooltip side="bottom" content={coverBgEnabled ? '关闭封面背景' : '开启封面背景'}>
+                <button
+                  type="button"
+                  onClick={toggleCoverBg}
+                  className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs transition-colors sm:px-3 ${
+                    coverBgEnabled
+                      ? 'bg-amber-400/15 text-amber-300 hover:bg-amber-400/25'
+                      : 'text-netease-muted hover:bg-netease-card hover:text-white'
+                  }`}
+                  aria-label="封面背景"
+                  aria-pressed={coverBgEnabled}
+                >
+                  <Image className="h-4 w-4" />
+                  <span className="hidden sm:inline">封面背景</span>
+                </button>
+              </Tooltip>
+
               <Tooltip side="bottom" content="TV歌词">
                 <button
                   onClick={handleCopyTvLink}
@@ -1231,7 +1262,7 @@ export default function Room() {
               <div className="flex min-h-[9rem] flex-[5] flex-col overflow-hidden border-b border-netease-border/50">
                 <HotSongPanel embedded addingId={addingId} onAdd={handleAdd} refreshKey={hotRefreshKey} />
               </div>
-              <div className="flex min-h-0 flex-[3.7] flex-col overflow-hidden">
+              <div className="flex min-h-0 flex-[3.8] flex-col overflow-hidden">
                 <RecommendedPlaylistsPanel onSelectPlaylist={handleRecommendPlaylistSelect} />
               </div>
             </div>
@@ -1633,7 +1664,7 @@ export default function Room() {
 
 
       {(room.current || room.randomLoading) && (
-        <MiniPlayer onExpand={() => setShowPlayer(true)} />
+        <MiniPlayer onExpand={() => setShowPlayer(true)} transparentBar={coverBgEnabled} />
       )}
 
 

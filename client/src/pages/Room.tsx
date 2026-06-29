@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
@@ -208,6 +208,10 @@ export default function Room() {
   const [tvCopied, setTvCopied] = useState(false);
   const [searchedKeyword, setSearchedKeyword] = useState('');
   const [searchMode, setSearchMode] = useState<SearchMode>('song');
+  const [activeSearchMode, setActiveSearchMode] = useState<SearchMode>('song');
+  const [overlaySearchMode, setOverlaySearchMode] = useState<SearchMode>('song');
+  const [overlayQuery, setOverlayQuery] = useState('');
+  const prevOverlayOpenRef = useRef(false);
   const [searchFilterMode, setSearchFilterMode] = useState<SearchFilterMode>('smart');
   const [playlistImportOpen, setPlaylistImportOpen] = useState(false);
   const [isPlaylistResults, setIsPlaylistResults] = useState(false);
@@ -507,6 +511,25 @@ export default function Room() {
     getAvailableSources().then(setSources);
   }, []);
 
+  useEffect(() => {
+    if (!isLgUp) return;
+    const overlayOpen = Boolean(searchedKeyword || searching || playlistSearchLoading);
+    if (overlayOpen && !prevOverlayOpenRef.current) {
+      setOverlaySearchMode(activeSearchMode);
+      const fromSearched = searchedKeyword.trim();
+      let keyword = '';
+      if (fromSearched.startsWith('歌单：')) {
+        keyword = playlistSearchBackup?.keyword.trim() || '';
+      } else if (!fromSearched.startsWith('正在')) {
+        keyword = fromSearched;
+      } else {
+        keyword = query.trim();
+      }
+      setOverlayQuery(keyword);
+    }
+    prevOverlayOpenRef.current = overlayOpen;
+  }, [isLgUp, activeSearchMode, searchedKeyword, searching, playlistSearchLoading, playlistSearchBackup, query]);
+
   const doSearch = useCallback(async (keyword: string, filterMode = searchFilterMode) => {
 
     if (!keyword.trim()) {
@@ -577,21 +600,21 @@ export default function Room() {
   const handlePlaylistPageSizeChange = useCallback((next: SongResultPageSize) => {
     setPlaylistSearchPageSize(next);
     setStoredSongResultPageSize(next);
-    if (searchedKeyword.trim() && searchMode === 'playlist') {
+    if (searchedKeyword.trim() && activeSearchMode === 'playlist') {
       void doPlaylistSearch(searchedKeyword, 1, playlistChannelFilter, next);
     }
-  }, [searchedKeyword, searchMode, playlistChannelFilter, doPlaylistSearch]);
+  }, [searchedKeyword, activeSearchMode, playlistChannelFilter, doPlaylistSearch]);
 
   const handlePlaylistChannelChange = useCallback((next: PlaylistChannelFilterMode) => {
     setPlaylistChannelFilter(next);
-    if (searchedKeyword.trim() && searchMode === 'playlist') {
+    if (searchedKeyword.trim() && activeSearchMode === 'playlist') {
       void doPlaylistSearch(searchedKeyword, 1, next);
     }
-  }, [searchedKeyword, searchMode, doPlaylistSearch]);
+  }, [searchedKeyword, activeSearchMode, doPlaylistSearch]);
 
   const handlePlaylistImport = useCallback(async (platform: PlaylistPlatform, input: string) => {
     setPlaylistImportOpen(false);
-    if (searchMode === 'playlist' && searchedKeyword.trim() && playlistSearchResults.length > 0) {
+    if (activeSearchMode === 'playlist' && searchedKeyword.trim() && playlistSearchResults.length > 0) {
       setPlaylistSearchBackup({
         keyword: searchedKeyword,
         results: playlistSearchResults,
@@ -604,6 +627,7 @@ export default function Room() {
     setSearching(true);
     setIsPlaylistResults(true);
     setSearchMode('song');
+    setActiveSearchMode('song');
     setPlaylistSearchResults([]);
     setPlaylistSearchTotal(0);
     setSearchedKeyword(`正在解析${platform === 'netease' ? '网易云' : 'QQ音乐'}歌单…`);
@@ -640,6 +664,7 @@ export default function Room() {
 
   const handleSearch = useCallback(() => {
     const keyword = query.trim();
+    setActiveSearchMode(searchMode);
     if (searchMode === 'playlist') {
       setSearchedKeyword(keyword);
       setIsPlaylistResults(false);
@@ -653,8 +678,96 @@ export default function Room() {
     doSearch(keyword);
   }, [query, searchMode, doPlaylistSearch, doSearch]);
 
+  const handleSearchModeChange = useCallback((mode: SearchMode) => {
+    if (mode === searchMode) return;
+
+    const fromQuery = query.trim();
+    let keyword = fromQuery;
+    if (!keyword) {
+      const fromSearched = searchedKeyword.trim();
+      if (fromSearched.startsWith('歌单：')) {
+        keyword = playlistSearchBackup?.keyword.trim() || '';
+      } else if (!fromSearched.startsWith('正在')) {
+        keyword = fromSearched;
+      }
+    }
+    if (!keyword) {
+      setSearchMode(mode);
+      return;
+    }
+
+    setSearchMode(mode);
+    setActiveSearchMode(mode);
+    setIsPlaylistResults(false);
+
+    if (mode === 'playlist') {
+      setResults([]);
+      setSearchedKeyword(keyword);
+      void doPlaylistSearch(keyword, 1);
+      return;
+    }
+
+    setPlaylistSearchResults([]);
+    setPlaylistSearchTotal(0);
+    setSearchedKeyword(keyword);
+    void doSearch(keyword);
+  }, [searchMode, query, searchedKeyword, playlistSearchBackup, doPlaylistSearch, doSearch]);
+
+  const handleOverlaySearch = useCallback(() => {
+    const keyword = overlayQuery.trim();
+    setActiveSearchMode(overlaySearchMode);
+    if (overlaySearchMode === 'playlist') {
+      setSearchedKeyword(keyword);
+      setIsPlaylistResults(false);
+      void doPlaylistSearch(keyword, 1);
+      return;
+    }
+    setIsPlaylistResults(false);
+    setPlaylistSearchResults([]);
+    setPlaylistSearchTotal(0);
+    setSearchedKeyword(keyword);
+    void doSearch(keyword);
+  }, [overlayQuery, overlaySearchMode, doPlaylistSearch, doSearch]);
+
+  const handleOverlaySearchModeChange = useCallback((mode: SearchMode) => {
+    if (mode === overlaySearchMode) return;
+
+    const fromQuery = overlayQuery.trim();
+    let keyword = fromQuery;
+    if (!keyword) {
+      const fromSearched = searchedKeyword.trim();
+      if (fromSearched.startsWith('歌单：')) {
+        keyword = playlistSearchBackup?.keyword.trim() || '';
+      } else if (!fromSearched.startsWith('正在')) {
+        keyword = fromSearched;
+      }
+    }
+    if (!keyword) {
+      setOverlaySearchMode(mode);
+      return;
+    }
+
+    setOverlaySearchMode(mode);
+    setActiveSearchMode(mode);
+    setOverlayQuery(keyword);
+    setIsPlaylistResults(false);
+
+    if (mode === 'playlist') {
+      setResults([]);
+      setSearchedKeyword(keyword);
+      void doPlaylistSearch(keyword, 1);
+      return;
+    }
+
+    setPlaylistSearchResults([]);
+    setPlaylistSearchTotal(0);
+    setSearchedKeyword(keyword);
+    void doSearch(keyword);
+  }, [overlaySearchMode, overlayQuery, searchedKeyword, playlistSearchBackup, doPlaylistSearch, doSearch]);
+
   const clearSearchResults = useCallback(() => {
     setQuery('');
+    setOverlayQuery('');
     setResults([]);
     setPlaylistSearchResults([]);
     setPlaylistSearchTotal(0);
@@ -663,6 +776,8 @@ export default function Room() {
     setIsPlaylistResults(false);
     setListPageSongs([]);
     setPlaylistSearchBackup(null);
+    setActiveSearchMode('song');
+    setOverlaySearchMode('song');
   }, []);
 
   const handleBackToPlaylistSearch = useCallback(() => {
@@ -673,8 +788,11 @@ export default function Room() {
     setIsPlaylistResults(false);
     setResults([]);
     setSearchMode('playlist');
+    setActiveSearchMode('playlist');
+    setOverlaySearchMode('playlist');
     setSearchedKeyword(playlistSearchBackup.keyword);
     setQuery(playlistSearchBackup.keyword);
+    setOverlayQuery(playlistSearchBackup.keyword);
     setPlaylistSearchResults(playlistSearchBackup.results);
     setPlaylistSearchPage(playlistSearchBackup.page);
     setPlaylistSearchTotal(playlistSearchBackup.total);
@@ -875,7 +993,7 @@ export default function Room() {
   const qqImportEnabled = sources.some((s) => s.id === 'tencent' && s.supportsSearch);
   const queueCount = (room.current ? 1 : 0) + room.queue.length;
   const showDesktopSearchOverlay = Boolean(searchedKeyword || searching || playlistSearchLoading);
-  const showPlaylistSearch = searchMode === 'playlist' && Boolean(searchedKeyword || playlistSearchLoading);
+  const showPlaylistSearch = activeSearchMode === 'playlist' && Boolean(searchedKeyword || playlistSearchLoading);
   const hasPlaylistSearchResults = showPlaylistSearch && playlistSearchResults.length > 0;
   const showPlaylistEmpty = showPlaylistSearch && !playlistSearchLoading && playlistSearchResults.length === 0;
   const showPlaylistSkeleton = showPlaylistSearch && playlistSearchLoading && playlistSearchResults.length === 0;
@@ -884,8 +1002,12 @@ export default function Room() {
     ? searching
     : playlistSearchLoading && playlistSearchResults.length === 0;
 
+  const overlaySearchButtonLoading = overlaySearchMode === 'song'
+    ? searching
+    : playlistSearchLoading && playlistSearchResults.length === 0;
+
   const renderResultsSummary = () => {
-    if (searchMode === 'playlist' && playlistSearchLoading) {
+    if (activeSearchMode === 'playlist' && playlistSearchLoading) {
       return `正在搜索歌单「${searchedKeyword}」...`;
     }
     if (searching) {
@@ -948,7 +1070,7 @@ export default function Room() {
           <button
             key={mode}
             type="button"
-            onClick={() => setSearchMode(mode)}
+            onClick={() => handleSearchModeChange(mode)}
             className={`rounded-lg px-2.5 py-2 text-xs transition-colors sm:px-3 sm:py-2.5 sm:text-sm ${
               searchMode === mode ? 'bg-netease-red text-white shadow-sm' : 'text-netease-muted hover:text-white'
             }`}
@@ -1064,9 +1186,9 @@ export default function Room() {
           <button
             key={mode}
             type="button"
-            onClick={() => setSearchMode(mode)}
+            onClick={() => handleOverlaySearchModeChange(mode)}
             className={`rounded-lg px-2.5 py-1.5 text-xs transition-colors ${
-              searchMode === mode ? 'bg-netease-red text-white shadow-sm' : 'text-netease-muted hover:text-white'
+              overlaySearchMode === mode ? 'bg-netease-red text-white shadow-sm' : 'text-netease-muted hover:text-white'
             }`}
           >
             {label}
@@ -1077,20 +1199,20 @@ export default function Room() {
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-netease-muted pointer-events-none" />
         <input
           type="text"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-          placeholder={searchMode === 'playlist' ? '搜索网易/QQ歌单...' : '搜索歌曲、歌手...'}
+          value={overlayQuery}
+          onChange={(e) => setOverlayQuery(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && handleOverlaySearch()}
+          placeholder={overlaySearchMode === 'playlist' ? '搜索网易/QQ歌单...' : '搜索歌曲、歌手...'}
           className="w-full bg-netease-card border border-netease-border rounded-xl pl-9 pr-3 py-2 text-sm text-white placeholder:text-netease-muted/50 focus:outline-none focus:border-netease-red/50 transition-colors"
         />
       </div>
       <button
         type="button"
-        onClick={handleSearch}
-        disabled={!query.trim() || (searchMode === 'song' && searching)}
+        onClick={handleOverlaySearch}
+        disabled={!overlayQuery.trim() || (overlaySearchMode === 'song' && searching)}
         className="flex-shrink-0 px-3 py-2 rounded-xl bg-netease-red text-white text-sm font-medium hover:bg-red-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center gap-1.5"
       >
-        {searchButtonLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+        {overlaySearchButtonLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
         搜索
       </button>
     </div>
@@ -1457,7 +1579,7 @@ export default function Room() {
                       <PlaylistChannelFilter value={playlistChannelFilter} onChange={handlePlaylistChannelChange} />
                     )}
                     {searchableCount > 0 && !isPlaylistResults && (
-                      searchMode === 'song' && <SearchFilterSelect value={searchFilterMode} onChange={handleSearchFilterChange} />
+                      activeSearchMode === 'song' && <SearchFilterSelect value={searchFilterMode} onChange={handleSearchFilterChange} />
                     )}
                     {showSongListResults && renderBulkAddPageButton()}
                     <button
@@ -1547,7 +1669,7 @@ export default function Room() {
                   <PlaylistChannelFilter value={playlistChannelFilter} onChange={handlePlaylistChannelChange} />
                 )}
                 {!searching && searchableCount > 0 && !isPlaylistResults && (
-                  searchMode === 'song' && <SearchFilterSelect value={searchFilterMode} onChange={handleSearchFilterChange} />
+                  activeSearchMode === 'song' && <SearchFilterSelect value={searchFilterMode} onChange={handleSearchFilterChange} />
                 )}
                 {showSongListResults && renderBulkAddPageButton('px-2.5 py-1.5')}
                 <button

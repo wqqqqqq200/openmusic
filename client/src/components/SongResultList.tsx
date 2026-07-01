@@ -1,10 +1,6 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Plus, Loader2 } from 'lucide-react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { SearchResult } from '../types';
 import { songKey } from '../api/music';
-import SongCover from './SongCover';
-import SongRowBadges from './SongRowBadges';
-import FavoriteButton from './FavoriteButton';
 import PageSizeSelect from './PageSizeSelect';
 import { RESULT_BODY_HEIGHT } from './SearchSkeleton';
 import {
@@ -13,9 +9,10 @@ import {
   SONG_RESULT_PAGE_SIZE_OPTIONS,
   type SongResultPageSize,
 } from '../lib/songResultPagination';
-import Tooltip from './Tooltip';
-import TruncateTip from './TruncateTip';
 import PageNumberPagination from './PageNumberPagination';
+import SongResultRow from './SongResultRow';
+import { useRoomSongKeySets } from '../hooks/useRoomSongKeySets';
+import { useFavorites } from '../hooks/useFavorites';
 
 interface Props {
   results: SearchResult[];
@@ -27,7 +24,7 @@ interface Props {
   fillHeight?: boolean;
 }
 
-export default function SongResultList({
+function SongResultList({
   results,
   addingId,
   onAdd,
@@ -38,9 +35,20 @@ export default function SongResultList({
 }: Props) {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState<SongResultPageSize>(getStoredSongResultPageSize);
+  const { queueKeys, playedKeys } = useRoomSongKeySets();
+  const { favoriteIds } = useFavorites();
+  const onAddRef = useRef(onAdd);
+  onAddRef.current = onAdd;
 
   const totalPages = Math.max(1, Math.ceil(results.length / pageSize));
-  const pageResults = results.slice((page - 1) * pageSize, page * pageSize);
+  const pageResults = useMemo(
+    () => results.slice((page - 1) * pageSize, page * pageSize),
+    [results, page, pageSize],
+  );
+
+  const handleRowAdd = useCallback((song: SearchResult) => {
+    onAddRef.current(song);
+  }, []);
 
   useEffect(() => setPage(1), [keyword, pageSize]);
   useEffect(() => { if (page > totalPages) setPage(totalPages); }, [page, totalPages]);
@@ -66,40 +74,16 @@ export default function SongResultList({
           {pageResults.map((song) => {
             const key = songKey(song);
             return (
-              <Tooltip key={key} content="双击点歌" side="bottom">
-                <div
-                  className="group flex cursor-pointer items-center gap-2 rounded-xl p-2.5 transition-colors hover:bg-netease-card/80 active:bg-netease-card/80 sm:gap-3 sm:p-3"
-                  onDoubleClick={() => onAdd(song)}
-                >
-                  <SongCover
-                    song={song}
-                    className="h-12 w-12 flex-shrink-0 rounded-lg bg-netease-card object-cover"
-                  />
-                  <div className="min-w-0 flex-1 space-y-0.5">
-                    <TruncateTip text={song.name} as="p" className="truncate text-sm font-medium" />
-                    <TruncateTip
-                      text={`${song.artist}${song.album ? ` · ${song.album}` : ''}`}
-                      as="p"
-                      className="truncate text-xs text-netease-muted"
-                    />
-                  </div>
-                  <SongRowBadges song={song} />
-                  <FavoriteButton
-                    song={song}
-                    showOnHover={!alwaysShowActions}
-                    className="h-7 w-7 text-netease-muted hover:text-rose-300"
-                    iconClassName="h-3.5 w-3.5"
-                  />
-                  <button
-                    onClick={(e) => { e.stopPropagation(); onAdd(song); }}
-                    disabled={addingId === key}
-                    className={`flex flex-shrink-0 items-center gap-1 rounded-full bg-netease-red/10 px-2.5 py-1 text-xs font-medium text-netease-red transition-all hover:bg-netease-red hover:text-white disabled:opacity-50 ${alwaysShowActions ? 'opacity-100' : 'opacity-100 sm:opacity-0 sm:group-hover:opacity-100'}`}
-                  >
-                    {addingId === key ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-                    点歌
-                  </button>
-                </div>
-              </Tooltip>
+              <SongResultRow
+                key={key}
+                song={song}
+                addingId={addingId}
+                alwaysShowActions={alwaysShowActions}
+                inQueue={queueKeys.has(key)}
+                played={playedKeys.has(key)}
+                favorited={favoriteIds.has(key)}
+                onAdd={handleRowAdd}
+              />
             );
           })}
         </div>
@@ -127,3 +111,12 @@ export default function SongResultList({
     </div>
   );
 }
+
+export default memo(SongResultList, (prev, next) => (
+  prev.results === next.results
+  && prev.addingId === next.addingId
+  && prev.keyword === next.keyword
+  && prev.alwaysShowActions === next.alwaysShowActions
+  && prev.fillHeight === next.fillHeight
+  && prev.onPageResultsChange === next.onPageResultsChange
+));

@@ -11,6 +11,8 @@ interface Props {
   titlePrefix?: string;
   /** 列表项中悬停时才显示 */
   showOnHover?: boolean;
+  /** 由父级传入时可避免列表行重复订阅收藏状态 */
+  favorited?: boolean;
 }
 
 export default function FavoriteButton({
@@ -19,12 +21,13 @@ export default function FavoriteButton({
   iconClassName = 'w-4 h-4',
   titlePrefix = '',
   showOnHover = false,
+  favorited: favoritedProp,
 }: Props) {
   const { isFavorite, toggleFavorite } = useFavorites();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const favorited = isFavorite(song);
+  const favorited = favoritedProp ?? isFavorite(song);
 
   const handleToggle = async (event?: React.MouseEvent) => {
     event?.stopPropagation();

@@ -1,6 +1,7 @@
 import './loadEnv.js';
 import { resizeCoverForThumb } from './coverUrl.js';
 import { serveUpstreamMedia } from './mediaProxy.js';
+import { buildRobotsTxt, buildSitemapXml, resolveSiteOrigin } from '../shared/seoFiles.mjs';
 import express from 'express';
 import cors from 'cors';
 import { createServer } from 'http';
@@ -868,6 +869,17 @@ app.post('/api/chat/upload-token', (req, res) => {
 });
 
 const clientDist = path.join(__dirname, '../client/dist');
+
+app.get('/robots.txt', (req, res) => {
+  const origin = resolveSiteOrigin(req, ALLOWED_ORIGINS);
+  res.type('text/plain').send(buildRobotsTxt(origin));
+});
+
+app.get('/sitemap.xml', (req, res) => {
+  const origin = resolveSiteOrigin(req, ALLOWED_ORIGINS);
+  res.type('application/xml').send(buildSitemapXml(origin));
+});
+
 app.use(express.static(clientDist));
 app.get('*', (req, res, next) => {
   if (req.path.startsWith('/api') || req.path.startsWith('/socket.io')) return next();

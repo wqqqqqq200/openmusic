@@ -2,11 +2,11 @@ import { useEffect } from 'react';
 
 export const SITE_NAME = 'OpenMusic';
 
-export const DEFAULT_TITLE = 'OpenMusic - 多人实时在线点歌';
+export const DEFAULT_TITLE = '一起听歌 · 多人实时点歌 - OpenMusic';
 export const DEFAULT_DESCRIPTION =
-  'OpenMusic 是多人实时在线点歌系统，支持网易云、QQ 音乐、酷狗搜索点歌，房间成员同步播放、歌词滚动、实时聊天与消息点评。';
+  '和好友一起听歌、多人同步播放的在线点歌房间。支持网易云、QQ 音乐、酷狗搜索点歌，歌词同步滚动、实时聊天；创建房间即可与小伙伴多人一起听歌。';
 export const DEFAULT_KEYWORDS =
-  '在线点歌,多人听歌,同步播放,网易云,QQ音乐,酷狗,歌词同步,房间点歌,实时聊天,OpenMusic';
+  '一起听歌,多人听歌,一起听歌房间,多人一起听歌,同步听歌,好友一起听歌,在线一起听歌,多人点歌,在线点歌,点歌房,同步播放,网易云,QQ音乐,酷狗,歌词同步,OpenMusic';
 
 export interface PageSeoOptions {
   title?: string;
@@ -16,12 +16,12 @@ export interface PageSeoOptions {
   noindex?: boolean;
 }
 
-/** 优先使用当前访问域名；构建预渲染或本地开发可设置 VITE_SITE_URL */
+/** 使用浏览器当前访问域名（canonical、OG 等） */
 export function getSiteOrigin(): string {
   if (typeof window !== 'undefined' && window.location.origin) {
     return window.location.origin;
   }
-  return (import.meta.env.VITE_SITE_URL as string | undefined)?.replace(/\/$/, '') || '';
+  return '';
 }
 
 function upsertMeta(name: string, content: string, attribute: 'name' | 'property' = 'name') {
@@ -51,12 +51,19 @@ function upsertJsonLd(origin: string) {
     '@context': 'https://schema.org',
     '@type': 'WebApplication',
     name: SITE_NAME,
+    alternateName: ['一起听歌', '多人听歌', '在线点歌房'],
     description: DEFAULT_DESCRIPTION,
     ...(origin ? { url: `${origin}/` } : {}),
     applicationCategory: 'MusicApplication',
     operatingSystem: 'Web',
     offers: { '@type': 'Offer', price: '0', priceCurrency: 'CNY' },
     inLanguage: 'zh-CN',
+    featureList: [
+      '和好友一起听歌，多人房间实时同步播放',
+      '网易云、QQ 音乐、酷狗多平台搜索点歌',
+      '歌词同步滚动，边听边聊',
+      '创建房间即可邀请小伙伴多人一起听歌',
+    ],
   };
 
   if (!el) {

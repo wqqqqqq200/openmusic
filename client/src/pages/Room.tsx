@@ -1015,7 +1015,7 @@ export default function Room() {
     setVisualMode(mode);
     writeRoomVisualMode(mode);
     if (prevNeedsProxy !== nextNeedsProxy && room?.current) {
-      showToast('背景已切换，音频设置将在下一首歌曲生效，当前曲目继续播放', 'success');
+      showToast('背景已切换，音频设置将在下一首歌曲生效', 'success');
     }
   };
 

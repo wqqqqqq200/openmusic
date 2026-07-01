@@ -1,8 +1,0 @@
-User-agent: *
-Allow: /
-
-# 房间与电视模式为动态会话页，不参与收录
-Disallow: /room/
-Disallow: /tv/
-
-# 生产构建时若设置 VITE_SITE_URL，将自动生成 Sitemap 行

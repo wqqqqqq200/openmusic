@@ -176,8 +176,8 @@ export default function Home() {
   const { leaveRoom } = useSocket();
 
   usePageSeo({
-    title: '房间大厅',
-    description: '创建或加入 OpenMusic 点歌房间，与好友实时同步听歌、搜索点歌、查看歌词。',
+    title: '一起听歌 · 房间大厅',
+    description: '创建或加入点歌房间，和好友一起听歌、多人实时同步播放；支持网易云 / QQ / 酷狗搜索点歌与歌词跟唱。',
     path: '/',
   });
 
